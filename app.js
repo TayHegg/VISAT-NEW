@@ -238,11 +238,23 @@ function renderLogin(errorMsg){
       <form id="loginForm" class="login-form" autocomplete="on">
         <div class="field">
           <label>E-mail</label>
-          <input type="email" id="loginEmail" autocomplete="username" required>
+          <input type="email" id="loginEmail" autocomplete="username" value="${esc(getRememberedEmail())}" required>
         </div>
         <div class="field">
           <label>Senha</label>
-          <input type="password" id="loginPassword" autocomplete="current-password" required>
+          <div style="position:relative;">
+            <input type="password" id="loginPassword" autocomplete="current-password" required style="width:100%;padding-right:38px;">
+            <button type="button" id="togglePasswordBtn" title="Mostrar/ocultar senha" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;color:var(--text-muted);display:flex;">
+              <svg id="togglePasswordIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:7px;font-weight:400;cursor:pointer;">
+            <input type="checkbox" id="rememberMeCheck" ${getRememberedEmail() ? 'checked' : ''}>
+            Lembrar meu e-mail neste dispositivo
+          </label>
+          <div class="hint">Guardamos apenas o seu e-mail neste navegador para agilizar o próximo acesso. Por segurança, nunca salvamos sua senha — se quiser, o próprio navegador pode oferecer para lembrá-la de forma protegida.</div>
         </div>
         ${errorMsg ? `<div class="login-error">${esc(errorMsg)}</div>` : ''}
         <button type="submit" class="btn btn-primary" id="loginSubmitBtn" style="width:100%;justify-content:center;margin-top:4px;">Entrar</button>
@@ -259,16 +271,41 @@ function traduzErroLogin(msg){
   return 'Não foi possível entrar. Tente novamente.';
 }
 
+function getRememberedEmail(){
+  try{ return localStorage.getItem('snat_remembered_email') || ''; }catch(e){ return ''; }
+}
+function setRememberedEmail(email){
+  try{
+    if(email){ localStorage.setItem('snat_remembered_email', email); }
+    else{ localStorage.removeItem('snat_remembered_email'); }
+  }catch(e){ /* localStorage indisponível — ignora silenciosamente */ }
+}
+
 function bindLoginEvents(){
   const form = document.getElementById('loginForm');
   if(!form) return;
   form.addEventListener('submit', handleLoginSubmit);
+
+  const toggleBtn = document.getElementById('togglePasswordBtn');
+  const pwdInput = document.getElementById('loginPassword');
+  if(toggleBtn && pwdInput){
+    toggleBtn.addEventListener('click', ()=>{
+      const isHidden = pwdInput.type === 'password';
+      pwdInput.type = isHidden ? 'text' : 'password';
+      const icon = document.getElementById('togglePasswordIcon');
+      icon.innerHTML = isHidden
+        ? '<path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a21.6 21.6 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 7 11 7a21.6 21.6 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>'
+        : '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>';
+    });
+  }
 }
 
 async function handleLoginSubmit(e){
   e.preventDefault();
   const email = document.getElementById('loginEmail').value.trim();
   const password = document.getElementById('loginPassword').value;
+  const rememberMe = document.getElementById('rememberMeCheck');
+  setRememberedEmail(rememberMe && rememberMe.checked ? email : '');
   const btn = document.getElementById('loginSubmitBtn');
   btn.disabled = true;
   btn.textContent = 'Entrando...';
