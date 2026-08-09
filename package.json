@@ -1,0 +1,10 @@
+{
+  "name": "snat-sistema-notificacao",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SNAT — Sistema de Notificação de Acidentes de Trabalho",
+  "scripts": {
+    "dev": "npx serve .",
+    "start": "npx serve ."
+  }
+}
