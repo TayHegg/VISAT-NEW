@@ -302,3 +302,12 @@ tr:hover td{background:var(--surface-2);}
   .gender-panel .donut-wrap{align-items:flex-start;}
   .gender-panel .donut-wrap svg{width:116px;height:116px;}
 }
+
+.monthly-point,.monthly-point-value{cursor:pointer;transition:opacity .15s ease,filter .15s ease;}
+.monthly-point:hover,.monthly-point-value:hover{filter:brightness(.82);}
+.monthly-point-value{paint-order:stroke;stroke:var(--surface);stroke-width:2px;stroke-linejoin:round;}
+.monthly-label{user-select:none;}
+.wide-monthly svg [role="button"]:focus{outline:none;filter:brightness(.82);}
+@media (max-width:700px){
+  .wide-monthly svg{height:210px;}
+}

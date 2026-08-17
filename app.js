@@ -594,6 +594,7 @@ function applyDashFilters(list){
 
 function getAnalyticsSelection(filter){
   if(filter && filter.startsWith('unit:')) return {kind:'unit', value:decodeURIComponent(filter.slice(5))};
+  if(filter && filter.startsWith('month:')) return {kind:'month', value:filter.slice(6)};
   return {kind:filter, value:null};
 }
 function setAnalyticsCardFilter(filter){
@@ -603,6 +604,9 @@ function setAnalyticsCardFilter(filter){
 function setAnalyticsUnitFilter(unit){
   // O valor chega codificado pelo atributo onclick; a decodificação ocorre em getAnalyticsSelection.
   setAnalyticsCardFilter(`unit:${unit}`);
+}
+function setAnalyticsMonthFilter(month){
+  setAnalyticsCardFilter(`month:${month}`);
 }
 
 function renderAnalyticsSelection(list, filter){
@@ -614,7 +618,9 @@ function renderAnalyticsSelection(list, filter){
       ? 'Fichas com indício de acidente envolvendo motocicleta'
       : selection.kind === 'unit'
         ? `Fichas — ${selection.value}`
-        : (AGRAVOS[selection.kind]?.label || 'Fichas selecionadas');
+        : selection.kind === 'month'
+          ? `Fichas — ${MESES[Number(selection.value)-1] || 'Mês selecionado'}`
+          : (AGRAVOS[selection.kind]?.label || 'Fichas selecionadas');
   return `<div class="panel selection-panel analytics-selection-panel">
     <div class="selection-heading"><div><h2>${esc(title)}</h2><div class="selection-hint">Clique em uma ficha para abrir o cadastro completo.</div></div><span class="selection-count">${list.length}</span></div>
     ${renderFichaSelectionList(list)}
@@ -633,9 +639,11 @@ function renderAnalytics(){
       ? filtered.filter(isMotoAccident)
       : selection.kind === 'unit'
         ? filtered.filter(r=>normalizeUnidadeSaude(r.unidadeSaude) === selection.value)
-        : selection.kind
-          ? filtered.filter(r=>r.agravoType===selection.kind)
-          : null;
+        : selection.kind === 'month'
+          ? filtered.filter(r=>(r.dataNotificacao || '').slice(5,7) === selection.value)
+          : selection.kind
+            ? filtered.filter(r=>r.agravoType===selection.kind)
+            : null;
   const motoCount = filtered.filter(isMotoAccident).length;
   const unidades = distinctNormalizedUnits();
   const municipios = distinctValues('municipioNotificacao');
@@ -725,14 +733,14 @@ function renderChartMensal(list){
   const toY = v => padT + (H-padT-padB) * (1 - v/maxVal);
   const pathFor = arr => arr.map((v,i)=> `${i===0?'M':'L'} ${xFor(i).toFixed(1)} ${toY(v).toFixed(1)}`).join(' ');
   const seriesSvg = Object.entries(seriesData).map(([k,arr])=>{
-    const points = arr.map((v,i)=> v ? `<circle cx="${xFor(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="2.8" fill="${AGRAVO_HEX[k]}"/><text x="${xFor(i).toFixed(1)}" y="${(toY(v)-6).toFixed(1)}" text-anchor="middle" font-size="8" fill="${AGRAVO_HEX[k]}">${v}</text>` : '').join('');
+    const points = arr.map((v,i)=> v ? `<circle class="monthly-point is-clickable" cx="${xFor(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="4" fill="${AGRAVO_HEX[k]}" onclick="setAnalyticsMonthFilter('${String(i+1).padStart(2,'0')}')"/><text class="monthly-point-value is-clickable" x="${xFor(i).toFixed(1)}" y="${(toY(v)-8).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="700" fill="${AGRAVO_HEX[k]}" role="button" tabindex="0" aria-label="${v} ocorrência(s) em ${months[i]}" onclick="setAnalyticsMonthFilter('${String(i+1).padStart(2,'0')}')">${v}</text>` : '').join('');
     return `<path d="${pathFor(arr)}" fill="none" stroke="${AGRAVO_HEX[k]}" stroke-width="2.2"/>${points}`;
   }).join('');
   return `<div class="chart-panel wide wide-monthly"><h3>Quantidade de Acidentes por Mês</h3>
     <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:230px" role="img" aria-label="Quantidade de acidentes por mês pela data de notificação">
       <line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="#DCE3E6"/>
       ${seriesSvg}
-      ${months.map((m,i)=>`<text x="${xFor(i).toFixed(1)}" y="${H-10}" text-anchor="middle" font-size="8" fill="#64747A">${m}</text>`).join('')}
+      ${months.map((m,i)=>`<text class="monthly-label" x="${xFor(i).toFixed(1)}" y="${H-10}" text-anchor="middle" font-size="11" font-weight="600" fill="#64747A">${m}</text>`).join('')}
     </svg>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:2px">
       ${Object.entries(AGRAVOS).map(([k,v])=>`<div class="legend-row" style="margin-bottom:0"><span class="sw" style="background:${AGRAVO_COLORS[k]}"></span><span class="lbl">${esc(v.label)}</span></div>`).join('')}
