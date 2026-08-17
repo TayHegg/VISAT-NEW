@@ -311,3 +311,47 @@ tr:hover td{background:var(--surface-2);}
 @media (max-width:700px){
   .wide-monthly svg{height:210px;}
 }
+
+
+/* Ocupação, códigos oficiais e seleção da Classe CNAE */
+.cnae-field input[readonly] {
+  background: #f5f8fa;
+  color: var(--text, #243746);
+  cursor: default;
+}
+.cnae-lookup-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+.cnae-choice {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #d7e1e6;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text, #243746);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
+}
+.cnae-choice:hover,
+.cnae-choice:focus-visible {
+  border-color: var(--primary, #0f6074);
+  background: #f4fafb;
+  box-shadow: 0 0 0 2px rgba(15, 96, 116, .12);
+  outline: none;
+}
+.cnae-choice strong {
+  color: var(--primary, #0f6074);
+  font-size: .95rem;
+}
+.cnae-choice span {
+  font-size: .82rem;
+}
+.cnae-choice small {
+  color: var(--text-muted, #687780);
+  font-size: .72rem;
+}
