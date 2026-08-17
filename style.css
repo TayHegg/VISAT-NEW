@@ -290,3 +290,15 @@ tr:hover td{background:var(--surface-2);}
   .chart-panel.wide-monthly{min-height:270px;}
   .chart-panel.wide-monthly svg{height:200px;}
 }
+
+/* Indicadores analíticos adicionais */
+.ind-card.moto{border-left-color:#8A5D14;}
+.ind-card.moto .n{color:#8A5D14;}
+.bar-row.is-clickable{padding:5px 4px;border-radius:7px;transition:background .15s ease,transform .15s ease;}
+.bar-row.is-clickable:hover{background:var(--surface-2);transform:translateX(2px);}
+.gender-panel .donut-wrap{min-height:136px;}
+.gender-panel .donut-wrap svg{width:136px;height:136px;flex-shrink:0;}
+@media (max-width:720px){
+  .gender-panel .donut-wrap{align-items:flex-start;}
+  .gender-panel .donut-wrap svg{width:116px;height:116px;}
+}

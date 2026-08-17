@@ -479,6 +479,20 @@ function isObito(r){
   const label = (EVOLUCAO_LABELS[r.agravoType]||{})[r.evolucaoCaso];
   return !!(label && label.toLowerCase().includes('óbito'));
 }
+
+// Indício analítico de acidente envolvendo motocicleta. O formulário não possui
+// campo próprio de veículo; por isso a regra usa CID externo V20–V29 e ocupações
+// explicitamente relacionadas a motocicleta, sem classificar todo motorista como moto.
+const MOTO_CID_RE = /\bV2[0-9](?:\.[0-9A-Z]+)?\b/i;
+const MOTO_OCCUPATION_TERMS = ['motociclista','motoboy','motoqueiro','motofretista','motocicleta','motociclo'];
+function normalizeSearchText(value){
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+}
+function isMotoAccident(r){
+  const cidText = [r.causaCID10].filter(Boolean).join(' ');
+  const occupationText = normalizeSearchText(r.ocupacao);
+  return MOTO_CID_RE.test(cidText) || MOTO_OCCUPATION_TERMS.some(term=>occupationText.includes(term));
+}
 function distinctValues(field){
   return [...new Set(records.map(r=>r[field]).filter(v=>v!==undefined && v!==null && v!==''))].sort((a,b)=> String(a).localeCompare(String(b),'pt-BR'));
 }
@@ -538,7 +552,7 @@ function normalizeUnidadeSaude(value){
   const raw = String(value || '').trim();
   if(!raw) return 'Não informado';
   const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
-  if(normalized.includes('PSMRO') || normalized.includes('PRONTO SOCORRO')) return 'Pronto Socorro (PSMRO)';
+  if(normalized.includes('PSMRO') || normalized.includes('PRONTO SOCORRO') || normalized.includes('PONTO SOCORRO')) return 'Pronto Socorro (PSMRO)';
   if(/\bUPA\b/.test(normalized)) return 'UPA';
   return raw;
 }
@@ -578,14 +592,29 @@ function applyDashFilters(list){
   });
 }
 
+function getAnalyticsSelection(filter){
+  if(filter && filter.startsWith('unit:')) return {kind:'unit', value:decodeURIComponent(filter.slice(5))};
+  return {kind:filter, value:null};
+}
 function setAnalyticsCardFilter(filter){
   analyticsCardFilter = analyticsCardFilter === filter ? null : filter;
   render();
 }
+function setAnalyticsUnitFilter(unit){
+  // O valor chega codificado pelo atributo onclick; a decodificação ocorre em getAnalyticsSelection.
+  setAnalyticsCardFilter(`unit:${unit}`);
+}
 
 function renderAnalyticsSelection(list, filter){
   if(!filter || !list) return '';
-  const title = filter === 'all' ? 'Todas as fichas filtradas' : (AGRAVOS[filter]?.label || 'Fichas selecionadas');
+  const selection = getAnalyticsSelection(filter);
+  const title = selection.kind === 'all'
+    ? 'Todas as fichas filtradas'
+    : selection.kind === 'moto'
+      ? 'Fichas com indício de acidente envolvendo motocicleta'
+      : selection.kind === 'unit'
+        ? `Fichas — ${selection.value}`
+        : (AGRAVOS[selection.kind]?.label || 'Fichas selecionadas');
   return `<div class="panel selection-panel analytics-selection-panel">
     <div class="selection-heading"><div><h2>${esc(title)}</h2><div class="selection-hint">Clique em uma ficha para abrir o cadastro completo.</div></div><span class="selection-count">${list.length}</span></div>
     ${renderFichaSelectionList(list)}
@@ -597,7 +626,17 @@ function renderAnalytics(){
   const total = filtered.length;
   const byType = {};
   Object.keys(AGRAVOS).forEach(k=> byType[k] = filtered.filter(r=>r.agravoType===k).length);
-  const analyticsSelected = analyticsCardFilter === 'all' ? filtered : (analyticsCardFilter ? filtered.filter(r=>r.agravoType===analyticsCardFilter) : null);
+  const selection = getAnalyticsSelection(analyticsCardFilter);
+  const analyticsSelected = selection.kind === 'all'
+    ? filtered
+    : selection.kind === 'moto'
+      ? filtered.filter(isMotoAccident)
+      : selection.kind === 'unit'
+        ? filtered.filter(r=>normalizeUnidadeSaude(r.unidadeSaude) === selection.value)
+        : selection.kind
+          ? filtered.filter(r=>r.agravoType===selection.kind)
+          : null;
+  const motoCount = filtered.filter(isMotoAccident).length;
   const unidades = distinctNormalizedUnits();
   const municipios = distinctValues('municipioNotificacao');
   const bairros = distinctValues('resBairro');
@@ -631,12 +670,14 @@ function renderAnalytics(){
       ${Object.entries(AGRAVOS).map(([k,v])=>`
         <div class="ind-card ${k} is-clickable ${analyticsCardFilter===k?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas desta classificação" onclick="setAnalyticsCardFilter('${k}')"><div class="n">${byType[k]}</div><div class="l">${esc(v.label)}</div><div class="pct">${pct(byType[k],total)}% do total</div></div>
       `).join('')}
+      <div class="ind-card moto is-clickable ${analyticsCardFilter==='moto'?'selected':''}" role="button" tabindex="0" title="Clique para listar os indícios de acidentes envolvendo motocicleta" onclick="setAnalyticsCardFilter('moto')"><div class="n">${motoCount}</div><div class="l">Acidentes envolvendo moto</div><div class="pct">${pct(motoCount,total)}% do total</div></div>
     </div>
     <div>
       <div class="charts-grid">
         ${renderChartTop5Unidades(filtered)}
-        ${renderChartMensal(filtered)}
+        ${renderChartGenero(filtered)}
         ${renderChartStatusInvestigacao(filtered)}
+        ${renderChartMensal(filtered)}
       </div>
       <div class="charts-grid cols-4">
         ${renderChartRaca(filtered)}
@@ -660,10 +701,10 @@ function renderAnalytics(){
 function renderChartTop5Unidades(list){
   const counts = {};
   list.forEach(r=>{ const u = normalizeUnidadeSaude(r.unidadeSaude); counts[u]=(counts[u]||0)+1; });
-  const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const max = top.length? top[0][1] : 1;
+  const units = Object.entries(counts).sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0],'pt-BR'));
+  const max = units.length? units[0][1] : 1;
   return `<div class="chart-panel"><h3>Unidade de Saúde</h3>
-    ${top.length? top.map(([u,n])=>`<div class="bar-row"><div class="lbl" title="${esc(u)}">${esc(u)}</div><div class="track"><div class="fill" style="width:${(n/max*100)}%;background:var(--primary-2)"></div></div><div class="val">${n} (${pct(n,list.length)}%)</div></div>`).join('') : '<div class="empty-mini">Sem dados para os filtros aplicados</div>'}
+    ${units.length? units.map(([u,n])=>`<div class="bar-row is-clickable" role="button" tabindex="0" title="Clique para listar as fichas desta unidade" onclick="setAnalyticsUnitFilter('${encodeURIComponent(u)}')"><div class="lbl" title="${esc(u)}">${esc(u)}</div><div class="track"><div class="fill" style="width:${(n/max*100)}%;background:var(--primary-2)"></div></div><div class="val">${n} (${pct(n,list.length)}%)</div></div>`).join('') : '<div class="empty-mini">Sem dados para os filtros aplicados</div>'}
   </div>`;
 }
 
@@ -711,6 +752,40 @@ function donutSVG(segments, size, stroke){
     return el;
   }).join('');
   return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${circles}<text x="${c}" y="${c}" text-anchor="middle" dominant-baseline="middle" font-family="monospace" font-size="20" font-weight="700" fill="#16262C">${total}</text></svg>`;
+}
+function pieSVG(segments, size){
+  const total = segments.reduce((sum, segment)=>sum + segment.value, 0);
+  if(!total) return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-label="Sem dados de gênero"><circle cx="${size/2}" cy="${size/2}" r="${size/2-2}" fill="#E8ECED"/></svg>`;
+  const center = size/2;
+  const radius = size/2-2;
+  let start = -Math.PI/2;
+  const paths = segments.filter(segment=>segment.value>0).map(segment=>{
+    const angle = segment.value/total * Math.PI*2;
+    const end = start + angle;
+    const x1 = center + radius*Math.cos(start), y1 = center + radius*Math.sin(start);
+    const x2 = center + radius*Math.cos(end), y2 = center + radius*Math.sin(end);
+    const large = angle > Math.PI ? 1 : 0;
+    const d = `M ${center} ${center} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${radius} ${radius} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`;
+    start = end;
+    return `<path d="${d}" fill="${segment.color}"/>`;
+  }).join('');
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img" aria-label="Distribuição por gênero">${paths}<circle cx="${center}" cy="${center}" r="1.5" fill="#fff"/></svg>`;
+}
+function renderChartGenero(list){
+  const counts = {M:0,F:0,I:0};
+  list.forEach(r=>{ counts[r.sexo] = (counts[r.sexo]||0) + 1; });
+  const total = list.length;
+  const segments = [
+    {key:'M',label:'Masculino',value:counts.M,color:'#2E6FB0'},
+    {key:'F',label:'Feminino',value:counts.F,color:'#D97A2B'},
+    {key:'I',label:'Ignorado / não informado',value:counts.I,color:'#AAB8BD'},
+  ];
+  return `<div class="chart-panel gender-panel"><h3>Gênero</h3>
+    <div class="donut-wrap">
+      ${total? pieSVG(segments,136) : '<div class="empty-mini">Sem dados</div>'}
+      <div class="donut-legend">${segments.map(segment=>`<div class="legend-row"><span class="sw" style="background:${segment.color}"></span><span class="lbl">${segment.label}</span><span class="val">${segment.value} (${pct(segment.value,total)}%)</span></div>`).join('')}</div>
+    </div>
+  </div>`;
 }
 function renderChartStatusInvestigacao(list){
   const fin = list.filter(r=>r.status==='finalizado').length;
