@@ -678,7 +678,7 @@ function renderChartMensal(list){
     if(m>=1 && m<=12 && seriesData[r.agravoType]) seriesData[r.agravoType][m-1]++;
   });
   const maxVal = Math.max(1, ...Object.values(seriesData).flat());
-  const W=420, H=170, padL=12, padR=8, padB=28, padT=12;
+  const W=960, H=230, padL=28, padR=18, padB=38, padT=18;
   const stepX = (W-padL-padR)/11;
   const xFor = i => padL+i*stepX;
   const toY = v => padT + (H-padT-padB) * (1 - v/maxVal);
@@ -687,8 +687,8 @@ function renderChartMensal(list){
     const points = arr.map((v,i)=> v ? `<circle cx="${xFor(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="2.8" fill="${AGRAVO_HEX[k]}"/><text x="${xFor(i).toFixed(1)}" y="${(toY(v)-6).toFixed(1)}" text-anchor="middle" font-size="8" fill="${AGRAVO_HEX[k]}">${v}</text>` : '').join('');
     return `<path d="${pathFor(arr)}" fill="none" stroke="${AGRAVO_HEX[k]}" stroke-width="2.2"/>${points}`;
   }).join('');
-  return `<div class="chart-panel wide"><h3>Quantidade de Acidentes por Mês</h3>
-    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:160px" role="img" aria-label="Quantidade de acidentes por mês pela data de notificação">
+  return `<div class="chart-panel wide wide-monthly"><h3>Quantidade de Acidentes por Mês</h3>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:230px" role="img" aria-label="Quantidade de acidentes por mês pela data de notificação">
       <line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="#DCE3E6"/>
       ${seriesSvg}
       ${months.map((m,i)=>`<text x="${xFor(i).toFixed(1)}" y="${H-10}" text-anchor="middle" font-size="8" fill="#64747A">${m}</text>`).join('')}

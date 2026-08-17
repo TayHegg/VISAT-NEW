@@ -282,3 +282,11 @@ tr:hover td{background:var(--surface-2);}
   .alert-card-type{text-align:left;max-width:100%;}
   .alert-card-open{display:none;}
 }
+
+/* Gráfico mensal ampliado: usa toda a largura disponível do dashboard. */
+.chart-panel.wide-monthly{grid-column:1 / -1;min-height:300px;}
+.chart-panel.wide-monthly svg{display:block;width:100%;height:230px;}
+@media (max-width:640px){
+  .chart-panel.wide-monthly{min-height:270px;}
+  .chart-panel.wide-monthly svg{height:200px;}
+}
