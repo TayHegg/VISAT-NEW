@@ -472,7 +472,7 @@ function render(){
 let lastBodyRegionData = {counts:{}, totalHits:0};
 
 function pct(n,total){ return total? Math.round(n/total*1000)/10 : 0; }
-function getEventDate(r){ return r.dataAcidente || r.dataAcidenteBio || r.dataDiagnosticoLD || r.dataDiagnosticoMental || r.dataNotificacao || ''; }
+function getEventDate(r){ return r.dataNotificacao || r.dataAcidente || r.dataAcidenteBio || r.dataDiagnosticoLD || r.dataDiagnosticoMental || ''; }
 function isObito(r){
   const label = (EVOLUCAO_LABELS[r.agravoType]||{})[r.evolucaoCaso];
   return !!(label && label.toLowerCase().includes('óbito'));
