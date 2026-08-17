@@ -140,6 +140,8 @@ let tableState = { search:'', sortKey:'patientName', sortDir:1, filterAgravo:'',
 let dashFilters = { ano:'', periodoIni:'', periodoFim:'', mes:'', agravo:'', unidade:'', municipio:'', bairro:'', ocupacao:'', sexo:'', racaCor:'', escolaridade:'', tipoAcidente:'', status:'', obito:'' };
 let bmSelectedRegion = null;
 let pendingDeleteId = null;
+let dashboardCardFilter = '';
+let analyticsCardFilter = null;
 
 /* ============================= SUPABASE ============================= */
 const SUPABASE_URL = 'https://rjcjvxxmfvasymcncrge.supabase.co';
@@ -480,13 +482,77 @@ function isObito(r){
 function distinctValues(field){
   return [...new Set(records.map(r=>r[field]).filter(v=>v!==undefined && v!==null && v!==''))].sort((a,b)=> String(a).localeCompare(String(b),'pt-BR'));
 }
+
+const REQUIRED_FIELD_LABELS = {
+  unidadeSaude:'Unidade de Saúde',
+  patientName:'Nome do paciente',
+  dataNascimento:'Data de nascimento',
+  sexo:'Sexo',
+  dataNotificacao:'Data da notificação',
+  municipioNotificacao:'Município de notificação',
+  ufNotificacao:'UF de notificação',
+  ocupacao:'Ocupação',
+  nomeEmpresa:'Nome da empresa',
+  dataAcidente:'Data do acidente',
+  municipioOcorrencia:'Município de ocorrência',
+  ufOcorrencia:'UF de ocorrência',
+  tipoAcidente:'Tipo de acidente',
+  ocorreuAtendimentoMedico:'Atendimento médico',
+  dataDiagnosticoLD:'Data do diagnóstico',
+  regimeTratamentoLD:'Regime de tratamento',
+  dataDiagnosticoMental:'Data do diagnóstico',
+  regimeTratamentoMental:'Regime de tratamento',
+  dataAcidenteBio:'Data do acidente/exposição',
+  tipoExposicao:'Tipo de exposição',
+  materialOrganico:'Material orgânico',
+};
+
+function getRequiredFieldsForRecord(r){
+  let typeFields = [];
+  if(r.agravoType === 'grave') typeFields = REQUIRED_GRAVE;
+  else if(r.agravoType === 'lerdort') typeFields = REQUIRED_LERDORT;
+  else if(r.agravoType === 'mental') typeFields = REQUIRED_MENTAL;
+  else if(r.agravoType === 'biologico') typeFields = REQUIRED_BIOLOGICO;
+  return [...new Set([...REQUIRED_COMMON, ...typeFields])];
+}
+
+function getMissingDataLabels(r){
+  const missing = getRequiredFieldsForRecord(r)
+    .filter(field => isEmpty(r[field]))
+    .map(field => REQUIRED_FIELD_LABELS[field] || field);
+  if(r.foiEmitidaCAT === '2') missing.push('Emissão da CAT');
+  if(r.agravoType === 'grave'){
+    if(isEmpty(r.diagnosticoLesaoCID10) && isEmpty(r.causaCID10)) missing.push('CID ou causa da lesão');
+    if(isEmpty(r.investigadorNome)) missing.push('Nome do investigador');
+  } else if(r.agravoType === 'lerdort' || r.agravoType === 'mental'){
+    if(isEmpty(r.diagnosticoCID10)) missing.push('CID/diagnóstico');
+    if(isEmpty(r.investigadorNome)) missing.push('Nome do investigador');
+  } else if(r.agravoType === 'biologico' && isEmpty(r.investigadorNome)){
+    missing.push('Nome do investigador');
+  }
+  if(r.status === 'aguardando_investigacao') missing.push('Investigação da ficha');
+  return [...new Set(missing)];
+}
+
+function normalizeUnidadeSaude(value){
+  const raw = String(value || '').trim();
+  if(!raw) return 'Não informado';
+  const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
+  if(normalized.includes('PSMRO') || normalized.includes('PRONTO SOCORRO')) return 'Pronto Socorro (PSMRO)';
+  if(/\bUPA\b/.test(normalized)) return 'UPA';
+  return raw;
+}
+
+function distinctNormalizedUnits(){
+  return [...new Set(records.map(r=>normalizeUnidadeSaude(r.unidadeSaude)))].sort((a,b)=>String(a).localeCompare(String(b),'pt-BR'));
+}
 function limparFiltrosDash(){
   Object.keys(dashFilters).forEach(k=> dashFilters[k]='');
   render();
 }
 function applyDashFilters(list){
   return list.filter(r=>{
-    const d = getEventDate(r);
+    const d = r.dataNotificacao || '';
     const y = d ? d.slice(0,4) : '';
     const m = d ? d.slice(5,7) : '';
     if(dashFilters.ano && y !== dashFilters.ano) return false;
@@ -494,7 +560,7 @@ function applyDashFilters(list){
     if(dashFilters.periodoIni && (!d || d < dashFilters.periodoIni)) return false;
     if(dashFilters.periodoFim && (!d || d > dashFilters.periodoFim)) return false;
     if(dashFilters.agravo && r.agravoType !== dashFilters.agravo) return false;
-    if(dashFilters.unidade && r.unidadeSaude !== dashFilters.unidade) return false;
+    if(dashFilters.unidade && normalizeUnidadeSaude(r.unidadeSaude) !== dashFilters.unidade) return false;
     if(dashFilters.municipio && r.municipioNotificacao !== dashFilters.municipio) return false;
     if(dashFilters.bairro && r.resBairro !== dashFilters.bairro) return false;
     if(dashFilters.ocupacao && !(r.ocupacao||'').toLowerCase().includes(dashFilters.ocupacao.toLowerCase())) return false;
@@ -512,15 +578,30 @@ function applyDashFilters(list){
   });
 }
 
+function setAnalyticsCardFilter(filter){
+  analyticsCardFilter = analyticsCardFilter === filter ? null : filter;
+  render();
+}
+
+function renderAnalyticsSelection(list, filter){
+  if(!filter || !list) return '';
+  const title = filter === 'all' ? 'Todas as fichas filtradas' : (AGRAVOS[filter]?.label || 'Fichas selecionadas');
+  return `<div class="panel selection-panel analytics-selection-panel">
+    <div class="selection-heading"><div><h2>${esc(title)}</h2><div class="selection-hint">Clique em uma ficha para abrir o cadastro completo.</div></div><span class="selection-count">${list.length}</span></div>
+    ${renderFichaSelectionList(list)}
+  </div>`;
+}
+
 function renderAnalytics(){
   const filtered = applyDashFilters(records);
   const total = filtered.length;
   const byType = {};
   Object.keys(AGRAVOS).forEach(k=> byType[k] = filtered.filter(r=>r.agravoType===k).length);
-  const unidades = distinctValues('unidadeSaude');
+  const analyticsSelected = analyticsCardFilter === 'all' ? filtered : (analyticsCardFilter ? filtered.filter(r=>r.agravoType===analyticsCardFilter) : null);
+  const unidades = distinctNormalizedUnits();
   const municipios = distinctValues('municipioNotificacao');
   const bairros = distinctValues('resBairro');
-  const anos = [...new Set(records.map(r=>{ const d=getEventDate(r); return d? d.slice(0,4):''; }).filter(Boolean))].sort().reverse();
+  const anos = [...new Set(records.map(r=>{ const d=r.dataNotificacao || ''; return d? d.slice(0,4):''; }).filter(Boolean))].sort().reverse();
 
   return `
   <div class="filter-bar">
@@ -545,10 +626,10 @@ function renderAnalytics(){
   </div>
   ${!records.length ? `<div class="panel"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg><div>Nenhuma notificação cadastrada ainda. Cadastre registros para visualizar o dashboard.</div></div></div>` : `
   <div class="analytics-layout">
-    <div class="indicator-col">
-      <div class="ind-card total"><div class="n">${total}</div><div class="l">Total Geral de Ocorrências</div></div>
+      <div class="indicator-col">
+      <div class="ind-card total is-clickable ${analyticsCardFilter==='all'?'selected':''}" role="button" tabindex="0" title="Clique para listar todas as fichas filtradas" onclick="setAnalyticsCardFilter('all')"><div class="n">${total}</div><div class="l">Total Geral de Ocorrências</div></div>
       ${Object.entries(AGRAVOS).map(([k,v])=>`
-        <div class="ind-card ${k}"><div class="n">${byType[k]}</div><div class="l">${esc(v.label)}</div><div class="pct">${pct(byType[k],total)}% do total</div></div>
+        <div class="ind-card ${k} is-clickable ${analyticsCardFilter===k?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas desta classificação" onclick="setAnalyticsCardFilter('${k}')"><div class="n">${byType[k]}</div><div class="l">${esc(v.label)}</div><div class="pct">${pct(byType[k],total)}% do total</div></div>
       `).join('')}
     </div>
     <div>
@@ -568,8 +649,9 @@ function renderAnalytics(){
         ${renderChartOcupacoes(filtered)}
         ${renderChartObitos(filtered)}
       </div>
+      </div>
     </div>
-  </div>
+    ${renderAnalyticsSelection(analyticsSelected, analyticsCardFilter)}
   `}
   <div class="bm-tooltip" id="bmTooltip"></div>
   `;
@@ -577,32 +659,39 @@ function renderAnalytics(){
 
 function renderChartTop5Unidades(list){
   const counts = {};
-  list.forEach(r=>{ const u = r.unidadeSaude||'Não informado'; counts[u]=(counts[u]||0)+1; });
+  list.forEach(r=>{ const u = normalizeUnidadeSaude(r.unidadeSaude); counts[u]=(counts[u]||0)+1; });
   const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const max = top.length? top[0][1] : 1;
-  return `<div class="chart-panel"><h3>Top 5 — Acidentes por Área</h3>
+  return `<div class="chart-panel"><h3>Unidade de Saúde</h3>
     ${top.length? top.map(([u,n])=>`<div class="bar-row"><div class="lbl" title="${esc(u)}">${esc(u)}</div><div class="track"><div class="fill" style="width:${(n/max*100)}%;background:var(--primary-2)"></div></div><div class="val">${n} (${pct(n,list.length)}%)</div></div>`).join('') : '<div class="empty-mini">Sem dados para os filtros aplicados</div>'}
   </div>`;
 }
 
 function renderChartMensal(list){
   const seriesData = {};
+  const months = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
   Object.keys(AGRAVOS).forEach(k=> seriesData[k] = Array(12).fill(0));
   list.forEach(r=>{
-    const d = getEventDate(r);
+    const d = r.dataNotificacao || '';
     if(!d) return;
     const m = parseInt(d.slice(5,7),10);
-    if(m>=1 && m<=12) seriesData[r.agravoType][m-1]++;
+    if(m>=1 && m<=12 && seriesData[r.agravoType]) seriesData[r.agravoType][m-1]++;
   });
   const maxVal = Math.max(1, ...Object.values(seriesData).flat());
-  const W=280, H=130, padL=6, padB=16, padT=8;
-  const stepX = (W-padL-6)/11;
+  const W=420, H=170, padL=12, padR=8, padB=28, padT=12;
+  const stepX = (W-padL-padR)/11;
+  const xFor = i => padL+i*stepX;
   const toY = v => padT + (H-padT-padB) * (1 - v/maxVal);
-  const pathFor = arr => arr.map((v,i)=> `${i===0?'M':'L'} ${padL+i*stepX} ${toY(v).toFixed(1)}`).join(' ');
+  const pathFor = arr => arr.map((v,i)=> `${i===0?'M':'L'} ${xFor(i).toFixed(1)} ${toY(v).toFixed(1)}`).join(' ');
+  const seriesSvg = Object.entries(seriesData).map(([k,arr])=>{
+    const points = arr.map((v,i)=> v ? `<circle cx="${xFor(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="2.8" fill="${AGRAVO_HEX[k]}"/><text x="${xFor(i).toFixed(1)}" y="${(toY(v)-6).toFixed(1)}" text-anchor="middle" font-size="8" fill="${AGRAVO_HEX[k]}">${v}</text>` : '').join('');
+    return `<path d="${pathFor(arr)}" fill="none" stroke="${AGRAVO_HEX[k]}" stroke-width="2.2"/>${points}`;
+  }).join('');
   return `<div class="chart-panel wide"><h3>Quantidade de Acidentes por Mês</h3>
-    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:140px">
-      <line x1="${padL}" y1="${H-padB}" x2="${W}" y2="${H-padB}" stroke="#DCE3E6"/>
-      ${Object.entries(seriesData).map(([k,arr])=>`<path d="${pathFor(arr)}" fill="none" stroke="${AGRAVO_HEX[k]}" stroke-width="2.2"/>`).join('')}
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:160px" role="img" aria-label="Quantidade de acidentes por mês pela data de notificação">
+      <line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="#DCE3E6"/>
+      ${seriesSvg}
+      ${months.map((m,i)=>`<text x="${xFor(i).toFixed(1)}" y="${H-10}" text-anchor="middle" font-size="8" fill="#64747A">${m}</text>`).join('')}
     </svg>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:2px">
       ${Object.entries(AGRAVOS).map(([k,v])=>`<div class="legend-row" style="margin-bottom:0"><span class="sw" style="background:${AGRAVO_COLORS[k]}"></span><span class="lbl">${esc(v.label)}</span></div>`).join('')}
@@ -797,6 +886,32 @@ function bindAnalyticsEvents(){
 }
 
 /* ============================= DASHBOARD ============================= */
+function setDashboardCardFilter(filter){
+  dashboardCardFilter = dashboardCardFilter === filter ? '' : filter;
+  render();
+}
+
+function renderDashboardSelection(list, filter){
+  if(!filter) return '';
+  const labels = {all:'Todas as fichas', red:'Fichas com pendência crítica', amber:'Fichas com pendência de atenção', green:'Fichas sem pendências'};
+  return `<div class="panel selection-panel">
+    <div class="selection-heading"><div><h2>${labels[filter] || 'Fichas selecionadas'}</h2><div class="selection-hint">Clique em uma ficha para abrir o cadastro completo.</div></div><span class="selection-count">${list.length}</span></div>
+    ${renderFichaSelectionList(list)}
+  </div>`;
+}
+
+function renderFichaSelectionList(list){
+  if(!list.length) return '<div class="empty-mini">Nenhuma ficha encontrada nesta classificação.</div>';
+  return `<div class="selection-list">${list.map(r=>{
+    const level = worstLevel(computeAlerts(r));
+    const alerts = computeAlerts(r).filter(a=>a.level!=='green');
+    return `<div class="selection-item" onclick="goTo('form','${r.id}')">
+      <div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span></div>
+      <div class="selection-item-meta"><span class="badge ${level}"><span class="dot ${level}"></span>${level==='red'?'Crítico':level==='amber'?'Atenção':'OK'}</span><span>${fmtDate(r.dataNotificacao)}</span>${alerts.length?`<span>${alerts.length} alerta(s)</span>`:''}</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
 function renderDashboard(){
   const withAlerts = records.map(r=>({r, alerts:computeAlerts(r), level: null}));
   withAlerts.forEach(x=> x.level = worstLevel(x.alerts));
@@ -813,28 +928,36 @@ function renderDashboard(){
     </div></div>`;
   }
 
-  const alertRows = [];
-  withAlerts.filter(x=>x.level!=='green').sort((a,b)=> (a.level==='red'?0:1)-(b.level==='red'?0:1))
-    .slice(0,8).forEach(x=>{
-      x.alerts.filter(a=>a.level!=='green').forEach(a=>{
-        alertRows.push(`<div class="alert-row ${a.level}" onclick="goTo('form','${x.r.id}')">
-          <span class="dot ${a.level}"></span>
-          <div style="flex:1"><b>${esc(x.r.patientName||'(sem nome)')}</b> — ${esc(a.label)}</div>
-          <span style="font-size:11.5px;color:var(--text-muted)">${esc(AGRAVOS[x.r.agravoType]?.label||'')}</span>
-        </div>`);
-      });
+  const alertCards = withAlerts.filter(x=>x.level!=='green')
+    .sort((a,b)=> (a.level==='red'?0:1)-(b.level==='red'?0:1)).map(x=>{
+      const missing = getMissingDataLabels(x.r);
+      return `<div class="alert-card ${x.level}" onclick="goTo('form','${x.r.id}')">
+        <div class="alert-card-main">
+          <span class="dot ${x.level}"></span>
+          <div class="alert-card-content">
+            <div class="alert-card-head"><span class="alert-card-ficha">Nº da Ficha: ${esc(fichaLabel(x.r))}</span><span class="alert-card-type">${esc(AGRAVOS[x.r.agravoType]?.label||'')}</span></div>
+            <div class="alert-card-name">${esc(x.r.patientName||'(sem nome)')}</div>
+            <div class="alert-card-sub">Dados pendentes nesta ficha:</div>
+            <ul class="alert-missing">${missing.length ? missing.map(item=>`<li>${esc(item)}</li>`).join('') : '<li>Verificar pendências do registro</li>'}</ul>
+          </div>
+          <span class="alert-card-open">Abrir ficha&nbsp; →</span>
+        </div>
+      </div>`;
     });
+
+  const dashboardSelection = dashboardCardFilter === 'all' ? records : withAlerts.filter(x=>x.level===dashboardCardFilter).map(x=>x.r);
 
   return `
     <div class="grid-stats">
-      <div class="stat-card primary"><div class="n">${records.length}</div><div class="l">Total de registros</div></div>
-      <div class="stat-card red"><div class="n">${nRed}</div><div class="l">Com pendência crítica</div></div>
-      <div class="stat-card amber"><div class="n">${nAmber}</div><div class="l">Com pendência de atenção</div></div>
-      <div class="stat-card green"><div class="n">${nGreen}</div><div class="l">Sem pendências</div></div>
+      <div class="stat-card primary is-clickable ${dashboardCardFilter==='all'?'selected':''}" role="button" tabindex="0" title="Clique para listar todas as fichas" onclick="setDashboardCardFilter('all')"><div class="n">${records.length}</div><div class="l">Total de registros</div></div>
+      <div class="stat-card red is-clickable ${dashboardCardFilter==='red'?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas com pendência crítica" onclick="setDashboardCardFilter('red')"><div class="n">${nRed}</div><div class="l">Com pendência crítica</div></div>
+      <div class="stat-card amber is-clickable ${dashboardCardFilter==='amber'?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas com pendência de atenção" onclick="setDashboardCardFilter('amber')"><div class="n">${nAmber}</div><div class="l">Com pendência de atenção</div></div>
+      <div class="stat-card green is-clickable ${dashboardCardFilter==='green'?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas sem pendências" onclick="setDashboardCardFilter('green')"><div class="n">${nGreen}</div><div class="l">Sem pendências</div></div>
     </div>
+    ${renderDashboardSelection(dashboardSelection, dashboardCardFilter)}
     <div class="panel">
       <h2><span class="dot red"></span> Alertas ativos ${nCatPend? `<span style="font-weight:400;color:var(--text-muted);font-size:12px">— ${nCatPend} CAT não emitida(s)</span>`:''}</h2>
-      ${alertRows.length ? alertRows.join('') : '<div style="color:var(--text-muted);font-size:13px">Nenhum alerta ativo. Todos os registros estão em dia.</div>'}
+      ${alertCards.length ? alertCards.join('') : '<div style="color:var(--text-muted);font-size:13px">Nenhum alerta ativo. Todos os registros estão em dia.</div>'}
     </div>
     <div class="panel">
       <h2>Registros recentes</h2>
