@@ -355,3 +355,30 @@ tr:hover td{background:var(--surface-2);}
   color: var(--text-muted, #687780);
   font-size: .72rem;
 }
+
+/* CEP e descrição dos códigos CID */
+.cep-field input,
+.field input[data-k="resCep"] {
+  letter-spacing: .04em;
+}
+#cepLookupStatus[data-state="success"] {
+  color: #178568;
+}
+#cepLookupStatus[data-state="error"] {
+  color: #b64646;
+}
+.cid-description {
+  min-height: 18px;
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.cid-description.has-value {
+  color: var(--primary-2);
+  font-weight: 600;
+}
+.cnae-field .hint,
+.cep-field .hint {
+  line-height: 1.35;
+}
