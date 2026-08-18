@@ -2721,8 +2721,8 @@ const APP_SHELL_HTML = `
       <div class="tag">Vigilância em Saúde do Trabalhador</div>
       <div class="title">SNAT — Notificação de Acidentes de Trabalho</div>
     </div>
-    <div class="nav-item" data-view="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>Painel</div>
     <div class="nav-item" data-view="analytics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>Dashboard Analítico</div>
+    <div class="nav-item" data-view="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>Painel</div>
     <div class="nav-item" data-view="consulta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Consulta de Fichas</div>
     <div class="nav-item" data-view="form"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Novo Registro</div>
     <div class="foot" id="sidebarFoot">4 fichas oficiais do SINAN implementadas: Acidente Grave, Exposição a Material Biológico, Transtorno Mental e LER/DORT.</div>
@@ -4033,13 +4033,11 @@ function renderPdfUpload(){
       : attachment
         ? `PDF anexado: ${attachment.name || 'ficha.pdf'}. O vínculo será mantido ao salvar.`
         : 'Selecione o PDF oficial da ficha. O arquivo será vinculado ao registro após o salvamento.';
-  return `<div class="pdf-upload field-grid">
-    <div class="field span2">
-      <label for="pdfFichaInput">Upload do arquivo PDF da ficha</label>
-      <input id="pdfFichaInput" type="file" accept="application/pdf,.pdf">
-      <span class="hint ${pdfAttachmentState.error?'pdf-error':''}" id="pdfFichaStatus">${esc(status)}</span>
-      ${attachment ? `<div class="pdf-existing no-print"><span>Arquivo já vinculado a esta ficha.</span><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(formData.id)}')">Abrir PDF</button></div>` : ''}
-    </div>
+  return `<div class="field pdf-upload">
+    <label for="pdfFichaInput">Arquivo PDF da Ficha</label>
+    <input id="pdfFichaInput" type="file" accept="application/pdf,.pdf">
+    <span class="hint ${pdfAttachmentState.error?'pdf-error':''}" id="pdfFichaStatus">${esc(status)}</span>
+    ${attachment ? `<div class="pdf-existing no-print"><span>Arquivo já vinculado a esta ficha.</span><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(formData.id)}')">Abrir PDF</button></div>` : ''}
   </div>`;
 }
 function formatFileSize(bytes){
@@ -4184,6 +4182,7 @@ function renderPage1(){
         ${field({num:'', label:'Nº da Ficha', key:'fichaNumero', hint:'Preenchimento manual'})}
         ${field({num:'', label:'Data de Lançamento', key:'dataLancamento', type:'date'})}
         ${field({num:'', label:'Status', key:'status', type:'select', required:true, options: STATUS_OPTIONS})}
+        ${renderPdfUpload()}
       </div>
     </div>
 
@@ -4261,11 +4260,6 @@ function renderPage1(){
         ${field({num:'', label:'Telefone (DDD + número)', key:'empTelefone', type:'tel'})}
         ${field({num:'', label:'O Empregador é Empresa Terceirizada', key:'empregadorTerceirizada', type:'select', options:[['1','Sim'],['2','Não'],['3','Não se aplica'],['9','Ignorado']]})}
       </div>
-    </div>
-
-    <div class="form-section">
-      <div class="sec-title">Arquivo PDF da Ficha</div>
-      ${renderPdfUpload()}
     </div>
 
     <div class="form-section">
