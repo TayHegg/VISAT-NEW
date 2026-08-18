@@ -3524,9 +3524,37 @@ function formatCnaeDisplay(value){
   const code = raw.match(/(\d{2})\.?([0-9]{2}-\d)/);
   return code ? `${code[1]}${code[2]}` : raw;
 }
+function occupationLookupKey(value){
+  return normalizeSearchText(String(value || '')).replace(/[^a-z0-9]/g,'');
+}
+function formatOccupationLabel(value){
+  const raw = String(value || '').trim();
+  if(!raw) return '';
+  return raw.toLocaleLowerCase('pt-BR').split(/(\s+)/).map((part,index)=>{
+    if(/^\s+$/.test(part)) return part;
+    if(index > 0 && /^(de|da|do|das|dos|e|em|para|por|com|a|o|as|os)$/i.test(part)) return part;
+    return part.charAt(0).toLocaleUpperCase('pt-BR') + part.slice(1);
+  }).join('');
+}
+function findOccupationInCboDb(value){
+  const key = occupationLookupKey(value);
+  if(!key || !Array.isArray(CBO_DB)) return null;
+  return CBO_DB.find(item=>occupationLookupKey(item.code)===key || occupationLookupKey(item.sinan)===key) || null;
+}
+function resolveOccupationName(record){
+  const candidates = [record.ocupacao, record.cbo, record.numeroCbo, record.cboOcupacao, record.codigoCbo];
+  let textualFallback = '';
+  for(const candidate of candidates){
+    const raw = String(candidate || '').trim();
+    if(!raw || normalizeSearchText(raw)==='nao informado') continue;
+    const found = findOccupationInCboDb(raw);
+    if(found) return formatOccupationLabel(found.desc);
+    if(!/^[0-9a-z.\-\/]+$/i.test(raw) || /[a-záàâãéêíóôõúç]/i.test(raw) && !/^\d/.test(raw)) textualFallback = raw;
+  }
+  return textualFallback ? formatOccupationLabel(textualFallback) : 'Ocupação não identificada';
+}
 function occupationRecordIdentity(record){
-  const rawOccupation = String(record.ocupacao || '').trim();
-  const occupation = rawOccupation && normalizeSearchText(rawOccupation) !== 'nao informado' ? rawOccupation : 'Ignorado';
+  const occupation = resolveOccupationName(record);
   const cnae = formatCnaeDisplay(record.cnae);
   return {cnae, occupation, key:`${cnae}::${occupation}`};
 }
