@@ -2619,6 +2619,11 @@ const CBO_DB = [
 ];
 
 const PARTES_CORPO = ["Olho","Cabeça","Pescoço","Tórax","Abdome","Mão","Membro superior","Membro inferior","Pé","Todo o corpo","Outro"];
+const INVESTIGADOR_UNIDADE_FIXA = 'DEPARTAMENTO DE VIGILÂNCIA E SAUDE DO TRABALHADOR';
+const INVESTIGADOR_FUNCAO_FIXA = 'Enfermeiro';
+const INVESTIGADOR_OPTIONS = [['Julio Cesar','Julio Cesar'],['Luciane Manhães','Luciane Manhães']];
+const PDF_BUCKET = 'visat-fichas-pdf';
+const PDF_MAX_BYTES = 8 * 1024 * 1024;
 
 // Mapeamento das partes do corpo oficiais do SINAN para as regiões consolidadas do mapa corporal
 const BODY_REGIONS = [
@@ -2649,6 +2654,7 @@ let view = 'dashboard';
 let editingId = null;
 let formPage = 1;
 let formData = {};
+let pdfAttachmentState = {file:null, attachment:null, loading:false, error:''};
 let tableState = { search:'', sortKey:'patientName', sortDir:1, filterAgravo:'', filterStatus:'', filterSituacao:'', page:1, pageSize:10 };
 let dashFilters = { ano:'', periodoIni:'', periodoFim:'', mes:'', agravo:'', unidade:'', municipio:'', bairro:'', ocupacao:'', sexo:'', racaCor:'', escolaridade:'', tipoAcidente:'', status:'', obito:'' };
 let bmSelectedRegion = null;
@@ -2953,7 +2959,10 @@ function goTo(v, id){
   if(v==='form'){
     editingId = id || null;
     formPage = 1;
-    formData = id ? {...records.find(r=>r.id===id)} : { id: uid(), agravoType:'grave', status:'aguardando_investigacao', createdAt: new Date().toISOString() };
+    const existing = id ? records.find(r=>r.id===id) : null;
+    formData = existing ? {...existing} : { id: uid(), agravoType:'grave', status:'aguardando_investigacao', createdAt: new Date().toISOString() };
+    applyInvestigatorDefaults();
+    pdfAttachmentState = {file:null, attachment:formData.pdfFicha || null, loading:false, error:''};
   } else if(v==='print'){
     editingId = id || editingId || null;
   }
@@ -3652,6 +3661,7 @@ function renderConsulta(){
               <button class="btn-icon" title="Editar" onclick="goTo('form','${r.id}')">${iconEdit()}</button>
               <button class="btn-icon" title="Duplicar" onclick="duplicateRecord('${r.id}')">${iconCopy()}</button>
               <button class="btn-icon" title="Imprimir" onclick="printRecord('${r.id}')">${iconPrint()}</button>
+              ${r.pdfFicha ? `<button class="btn-icon pdf-action" title="Abrir PDF da ficha" onclick="openPdfForRecord('${esc(r.id)}')">PDF</button>` : ''}
               <button class="btn-icon" title="Excluir" onclick="askDelete('${r.id}')">${iconTrash()}</button>
             </div></td>
           </tr>`;
@@ -3710,7 +3720,7 @@ async function confirmDelete(){
 async function duplicateRecord(id){
   const orig = records.find(r=>r.id===id);
   if(!orig) return;
-  const copy = {...orig, id: uid(), fichaNumero: '', patientName: orig.patientName + ' (cópia)', createdAt: new Date().toISOString()};
+  const copy = {...orig, id: uid(), fichaNumero: '', patientName: orig.patientName + ' (cópia)', createdAt: new Date().toISOString(), pdfFicha: null};
   records.push(copy);
   render();
   const ok = await upsertRecordRemote(copy);
@@ -3813,26 +3823,18 @@ const EXPORT_COMMON_COLS = [
   ['Ponto de Referência (Empresa)', r=>r.empPontoReferencia||''],
   ['Telefone (Empresa)', r=>r.empTelefone||''],
   ['Empregador Terceirizado', r=>labelOf(CAT_OPTIONS, r.empregadorTerceirizada)],
+  ['PDF da Ficha', r=>r.pdfFicha?.name||''],
 ];
 
 const GRAVE_COLS = [
   ['Local do Acidente', r=>labelOf([['1','Instalações do contratante'],['2','Via pública'],['3','Instalações de terceiros'],['4','Domicílio próprio'],['9','Ignorado']], r.localAcidente)],
-  ['CNAE Empresa Principal', r=>r.cnaeEmpresaPrincipal||''],
-  ['CNPJ Empresa Principal', r=>r.cnpjEmpresaPrincipal||''],
-  ['Razão Social Empresa Principal', r=>r.razaoSocialEmpresaPrincipal||''],
   ['Hora do Acidente', r=>r.horaAcidente||''],
   ['Horas Após Início da Jornada', r=>r.horasAposInicioJornada||''],
   ['UF de Ocorrência', r=>r.ufOcorrencia||''],
   ['Município de Ocorrência', r=>r.municipioOcorrencia||''],
   ['Causa do Acidente (CID-10)', r=>r.causaCID10||''],
   ['Tipo de Acidente', r=>labelOf([['1','Típico'],['2','Trajeto'],['9','Ignorado']], r.tipoAcidente)],
-  ['Outros Trabalhadores Atingidos', r=>labelOf(SIM_NAO_IGN, r.houveOutrosTrabalhadores)],
-  ['Quantos Trabalhadores', r=>r.quantosTrabalhadores||''],
   ['Ocorreu Atendimento Médico', r=>labelOf(SIM_NAO_IGN, r.ocorreuAtendimentoMedico)],
-  ['Data do Atendimento', r=>fmtDate(r.dataAtendimento)],
-  ['UF do Atendimento', r=>r.ufAtendimento||''],
-  ['Município do Atendimento', r=>r.municipioAtendimento||''],
-  ['Unidade de Atendimento', r=>r.nomeUnidadeAtendimento||''],
   ['Partes do Corpo Atingidas', r=>arrJoin(r.partesCorpo)],
   ['Diagnóstico da Lesão (CID-10)', r=>r.diagnosticoLesaoCID10||''],
   ['Regime de Tratamento', r=>labelOf(REGIME_TRAT_OPTIONS, r.regimeTratamento)],
@@ -3842,10 +3844,10 @@ const GRAVE_COLS = [
   ['Descrição Sumária', r=>r.descricaoSumaria||''],
   ['Informações Complementares', r=>r.informacoesComplementares||''],
   ['Município/Unidade do Investigador', r=>r.investigadorMunicipioUnidade||''],
-  ['Código da Unidade de Saúde', r=>r.codUnidadeSaude||''],
+  ['Secretaria', r=>r.codUnidadeSaude||''],
   ['Nome do Investigador', r=>r.investigadorNome||''],
-  ['Função do Investigador', r=>r.investigadorFuncao||''],
-  ['Assinatura', r=>r.investigadorAssinatura||''],
+  ['Função', r=>r.investigadorFuncao||''],
+  ['Nome do Digitador', r=>r.investigadorAssinatura||''],
 ];
 
 const LERDORT_COLS = [
@@ -3870,10 +3872,10 @@ const LERDORT_COLS = [
   ['CAT Emitida', r=>labelOf(CAT_OPTIONS, r.foiEmitidaCAT)],
   ['Informações Complementares', r=>r.informacoesComplementares||''],
   ['Município/Unidade do Investigador', r=>r.investigadorMunicipioUnidade||''],
-  ['Código da Unidade de Saúde', r=>r.codUnidadeSaude||''],
+  ['Secretaria', r=>r.codUnidadeSaude||''],
   ['Nome do Investigador', r=>r.investigadorNome||''],
-  ['Função do Investigador', r=>r.investigadorFuncao||''],
-  ['Assinatura', r=>r.investigadorAssinatura||''],
+  ['Função', r=>r.investigadorFuncao||''],
+  ['Nome do Digitador', r=>r.investigadorAssinatura||''],
 ];
 
 const MENTAL_COLS = [
@@ -3894,10 +3896,10 @@ const MENTAL_COLS = [
   ['CAT Emitida', r=>labelOf(CAT_OPTIONS, r.foiEmitidaCAT)],
   ['Informações Complementares', r=>r.informacoesComplementares||''],
   ['Município/Unidade do Investigador', r=>r.investigadorMunicipioUnidade||''],
-  ['Código da Unidade de Saúde', r=>r.codUnidadeSaude||''],
+  ['Secretaria', r=>r.codUnidadeSaude||''],
   ['Nome do Investigador', r=>r.investigadorNome||''],
-  ['Função do Investigador', r=>r.investigadorFuncao||''],
-  ['Assinatura', r=>r.investigadorAssinatura||''],
+  ['Função', r=>r.investigadorFuncao||''],
+  ['Nome do Digitador', r=>r.investigadorAssinatura||''],
 ];
 
 const BIOLOGICO_COLS = [
@@ -3928,10 +3930,10 @@ const BIOLOGICO_COLS = [
   ['CAT Emitida', r=>labelOf(CAT_OPTIONS, r.foiEmitidaCAT)],
   ['Informações Complementares', r=>r.informacoesComplementares||''],
   ['Município/Unidade do Investigador', r=>r.investigadorMunicipioUnidade||''],
-  ['Código da Unidade de Saúde', r=>r.codUnidadeSaude||''],
+  ['Secretaria', r=>r.codUnidadeSaude||''],
   ['Nome do Investigador', r=>r.investigadorNome||''],
-  ['Função do Investigador', r=>r.investigadorFuncao||''],
-  ['Assinatura', r=>r.investigadorAssinatura||''],
+  ['Função', r=>r.investigadorFuncao||''],
+  ['Nome do Digitador', r=>r.investigadorAssinatura||''],
 ];
 
 function exportExcel(){
@@ -3968,7 +3970,7 @@ function field(opts){
   const invalid = required && !val;
   let input = '';
   if(type==='select'){
-    input = `<select data-k="${key}" ${required?'required':''}>
+    input = `<select data-k="${key}" ${required?'required':''} ${readOnly?'disabled':''}>
       <option value="">Selecione...</option>
       ${options.map(o=>`<option value="${o[0]}" ${val===o[0]?'selected':''}>${esc(o[1])}</option>`).join('')}
     </select>`;
@@ -4012,6 +4014,115 @@ function cnaeClassField(){
     <span class="hint" id="cnaeLookupStatus">${val ? 'Classe CNAE armazenada neste registro.' : 'Selecione uma ocupação para consultar a Classe CNAE oficial no CONCLA/IBGE.'}</span>
     <div id="cnaeLookupList" class="cnae-lookup-list"></div>
   </div>`;
+}
+
+function applyInvestigatorDefaults(){
+  formData.investigadorMunicipioUnidade = INVESTIGADOR_UNIDADE_FIXA;
+  formData.investigadorFuncao = INVESTIGADOR_FUNCAO_FIXA;
+  if(formData.investigadorNome && !INVESTIGADOR_OPTIONS.some(option=>option[0] === formData.investigadorNome)){
+    formData.investigadorNome = '';
+  }
+}
+function renderPdfUpload(){
+  const attachment = pdfAttachmentState.attachment;
+  const selected = pdfAttachmentState.file;
+  const status = pdfAttachmentState.error
+    ? pdfAttachmentState.error
+    : selected
+      ? `PDF selecionado: ${selected.name} (${formatFileSize(selected.size)}). Será enviado ao salvar.`
+      : attachment
+        ? `PDF anexado: ${attachment.name || 'ficha.pdf'}. O vínculo será mantido ao salvar.`
+        : 'Selecione o PDF oficial da ficha. O arquivo será vinculado ao registro após o salvamento.';
+  return `<div class="pdf-upload field-grid">
+    <div class="field span2">
+      <label for="pdfFichaInput">Upload do arquivo PDF da ficha</label>
+      <input id="pdfFichaInput" type="file" accept="application/pdf,.pdf">
+      <span class="hint ${pdfAttachmentState.error?'pdf-error':''}" id="pdfFichaStatus">${esc(status)}</span>
+      ${attachment ? `<div class="pdf-existing no-print"><span>Arquivo já vinculado a esta ficha.</span><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(formData.id)}')">Abrir PDF</button></div>` : ''}
+    </div>
+  </div>`;
+}
+function formatFileSize(bytes){
+  if(!Number.isFinite(bytes) || bytes <= 0) return 'tamanho desconhecido';
+  if(bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+function isPdfFile(file){
+  return Boolean(file && (file.type === 'application/pdf' || /\\.pdf$/i.test(file.name || '')));
+}
+function setPdfStatus(message, isError=false){
+  const status = document.getElementById('pdfFichaStatus');
+  if(status){
+    status.textContent = message;
+    status.classList.toggle('pdf-error', isError);
+  }
+}
+function handlePdfInput(input){
+  const file = input?.files?.[0] || null;
+  if(!file) return;
+  if(!isPdfFile(file)){
+    input.value = '';
+    pdfAttachmentState.file = null;
+    pdfAttachmentState.error = 'Selecione um arquivo PDF válido.';
+    setPdfStatus(pdfAttachmentState.error, true);
+    return;
+  }
+  if(file.size > PDF_MAX_BYTES){
+    input.value = '';
+    pdfAttachmentState.file = null;
+    pdfAttachmentState.error = `O PDF ultrapassa o limite de ${formatFileSize(PDF_MAX_BYTES)}.`;
+    setPdfStatus(pdfAttachmentState.error, true);
+    return;
+  }
+  pdfAttachmentState.file = file;
+  pdfAttachmentState.error = '';
+  setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). Será enviado ao salvar.`);
+}
+function sanitizeFileName(name){
+  return String(name || 'ficha.pdf').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(-100) || 'ficha.pdf';
+}
+function readFileAsDataUrl(file){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Não foi possível ler o PDF selecionado.'));
+    reader.readAsDataURL(file);
+  });
+}
+async function uploadPdfAttachment(recordId, file){
+  const fileName = `${recordId}-${Date.now()}-${sanitizeFileName(file.name)}`;
+  const storagePath = `${currentUser?.id || 'public'}/${fileName}`;
+  try{
+    const {data, error} = await supabaseClient.storage.from(PDF_BUCKET).upload(storagePath, file, {contentType:'application/pdf', upsert:true});
+    if(!error){
+      return {mode:'storage', name:file.name, size:file.size, contentType:'application/pdf', path:data?.path || storagePath, uploadedAt:new Date().toISOString()};
+    }
+    console.warn('Supabase Storage indisponível para o PDF; usando o armazenamento do registro.', error);
+  }catch(error){
+    console.warn('Falha no Supabase Storage; usando o armazenamento do registro.', error);
+  }
+  const dataUrl = await readFileAsDataUrl(file);
+  return {mode:'record', name:file.name, size:file.size, contentType:'application/pdf', dataUrl, uploadedAt:new Date().toISOString()};
+}
+async function getPdfAttachmentUrl(attachment){
+  if(!attachment) return '';
+  if(attachment.mode === 'record') return attachment.dataUrl || '';
+  if(attachment.mode === 'storage' && attachment.path){
+    try{
+      const {data, error} = await supabaseClient.storage.from(PDF_BUCKET).createSignedUrl(attachment.path, 3600);
+      if(!error && data?.signedUrl) return data.signedUrl;
+    }catch(error){
+      console.warn('Falha ao gerar link temporário do PDF.', error);
+    }
+  }
+  return attachment.url || '';
+}
+async function openPdfForRecord(id){
+  const record = records.find(r=>r.id===id);
+  if(!record?.pdfFicha){ showToast('Esta ficha não possui PDF anexado.'); return; }
+  const url = await getPdfAttachmentUrl(record.pdfFicha);
+  if(!url){ showToast('Não foi possível abrir o PDF anexado.'); return; }
+  window.open(url, '_blank', 'noopener');
 }
 
 function checkboxGroup(opts){
@@ -4151,6 +4262,18 @@ function renderPage1(){
         ${field({num:'', label:'O Empregador é Empresa Terceirizada', key:'empregadorTerceirizada', type:'select', options:[['1','Sim'],['2','Não'],['3','Não se aplica'],['9','Ignorado']]})}
       </div>
     </div>
+
+    <div class="form-section">
+      <div class="sec-title">Arquivo PDF da Ficha</div>
+      ${renderPdfUpload()}
+    </div>
+
+    <div class="form-section">
+      <div class="sec-title">Dados do Acidente</div>
+      <div class="field-grid">
+        ${field({num:34, label:'Local Onde Ocorreu o Acidente', key:'localAcidente', type:'select', span:'span2', options:[['1','Instalações do contratante'],['2','Via pública'],['3','Instalações de terceiros'],['4','Domicílio próprio'],['9','Ignorado']]})}
+      </div>
+    </div>
   </div>`;
 }
 function idadeChipText(){
@@ -4176,10 +4299,6 @@ function renderPage2Grave(){
     <div class="form-section">
       <div class="sec-title">Dados do Acidente</div>
       <div class="field-grid">
-        ${field({num:34, label:'Local Onde Ocorreu o Acidente', key:'localAcidente', type:'select', span:'span2', options:[['1','Instalações do contratante'],['2','Via pública'],['3','Instalações de terceiros'],['4','Domicílio próprio'],['9','Ignorado']]})}
-        ${field({num:47, label:'Se Empresa Terceirizada, CNAE da Empresa Principal', key:'cnaeEmpresaPrincipal'})}
-        ${field({num:48, label:'CNPJ da Empresa Principal', key:'cnpjEmpresaPrincipal'})}
-        ${field({num:49, label:'Razão Social (Empresa Principal)', key:'razaoSocialEmpresaPrincipal', span:'span2'})}
         ${field({num:'', label:'Data do Acidente', key:'dataAcidente', type:'date', required:true})}
         ${field({num:50, label:'Hora do Acidente', key:'horaAcidente', type:'text', hint:'Formato HH:MM'})}
         ${field({num:51, label:'Horas Após o Início da Jornada', key:'horasAposInicioJornada', hint:'Formato HH:MM'})}
@@ -4187,8 +4306,6 @@ function renderPage2Grave(){
         ${field({num:53, label:'Município de Ocorrência do Acidente', key:'municipioOcorrencia', required:true, span:'span2'})}
         ${autocompleteField({num:54, label:'Código da Causa do Acidente (CID-10, V01 a Y98)', key:'causaCID10', db:'cid'})}
         ${field({num:55, label:'Tipo de Acidente', key:'tipoAcidente', type:'select', required:true, options:[['1','Típico'],['2','Trajeto'],['9','Ignorado']]})}
-        ${field({num:56, label:'Houve Outros Trabalhadores Atingidos', key:'houveOutrosTrabalhadores', type:'select', options:[['1','Sim'],['2','Não'],['9','Ignorado']]})}
-        ${field({num:57, label:'Se Sim, Quantos', key:'quantosTrabalhadores', type:'number'})}
       </div>
     </div>
 
@@ -4196,10 +4313,6 @@ function renderPage2Grave(){
       <div class="sec-title">Dados do Atendimento Médico</div>
       <div class="field-grid">
         ${field({num:58, label:'Ocorreu Atendimento Médico?', key:'ocorreuAtendimentoMedico', type:'select', required:true, options:[['1','Sim'],['2','Não'],['9','Ignorado']]})}
-        ${field({num:59, label:'Data do Atendimento', key:'dataAtendimento', type:'date'})}
-        ${field({num:60, label:'UF do Atendimento', key:'ufAtendimento', type:'select', options: UFS.map(u=>[u,u])})}
-        ${field({num:61, label:'Município do Atendimento', key:'municipioAtendimento'})}
-        ${field({num:62, label:'Nome da Unidade de Saúde de Atendimento', key:'nomeUnidadeAtendimento', span:'span2'})}
         ${checkboxGroup({num:63, label:'Partes do Corpo Atingidas', key:'partesCorpo', options: PARTES_CORPO})}
         ${autocompleteField({num:64, label:'Diagnóstico da Lesão (CID-10)', key:'diagnosticoLesaoCID10', db:'cid'})}
         ${field({num:65, label:'Regime de Tratamento', key:'regimeTratamento', type:'select', options:[['1','Hospitalar'],['2','Ambulatorial'],['3','Ambos'],['9','Ignorado']]})}
@@ -4222,11 +4335,11 @@ function renderPage2Grave(){
       <div class="field-grid">
         ${field({num:'', label:'Descrição sumária de como ocorreu o acidente/atividade/causas/condições/objeto/agentes que concorreram direta ou indiretamente para a ocorrência', key:'descricaoSumaria', type:'textarea', span:'full'})}
         ${field({num:'', label:'Informações complementares e observações', key:'informacoesComplementares', type:'textarea', span:'full'})}
-        ${field({num:'', label:'Município/Unidade de Saúde do Investigador', key:'investigadorMunicipioUnidade', span:'span2'})}
-        ${field({num:'', label:'Código da Unidade de Saúde', key:'codUnidadeSaude'})}
-        ${field({num:'', label:'Nome do Investigador', key:'investigadorNome'})}
-        ${field({num:'', label:'Função', key:'investigadorFuncao'})}
-        ${field({num:'', label:'Assinatura', key:'investigadorAssinatura', hint:'Registro textual da assinatura'})}
+        ${field({num:'', label:'Município/Unidade de Saúde do Investigador', key:'investigadorMunicipioUnidade', span:'span2', readOnly:true})}
+        ${field({num:'', label:'Secretaria', key:'codUnidadeSaude'})}
+        ${field({num:'', label:'Nome do Investigador', key:'investigadorNome', type:'select', options:INVESTIGADOR_OPTIONS})}
+        ${field({num:'', label:'Função', key:'investigadorFuncao', readOnly:true})}
+        ${field({num:'', label:'Nome do Digitador', key:'investigadorAssinatura'})}
       </div>
     </div>
   </div>`;
@@ -4390,11 +4503,11 @@ function renderInvestigadorBlock(){
     <div class="sec-title">Investigador e Observações</div>
     <div class="field-grid">
       ${field({num:'', label:'Informações Complementares e Observações', key:'informacoesComplementares', type:'textarea', span:'full'})}
-      ${field({num:'', label:'Município/Unidade de Saúde do Investigador', key:'investigadorMunicipioUnidade', span:'span2'})}
-      ${field({num:'', label:'Código da Unidade de Saúde', key:'codUnidadeSaude'})}
-      ${field({num:'', label:'Nome do Investigador', key:'investigadorNome'})}
-      ${field({num:'', label:'Função', key:'investigadorFuncao'})}
-      ${field({num:'', label:'Assinatura', key:'investigadorAssinatura', hint:'Registro textual da assinatura'})}
+      ${field({num:'', label:'Município/Unidade de Saúde do Investigador', key:'investigadorMunicipioUnidade', span:'span2', readOnly:true})}
+      ${field({num:'', label:'Secretaria', key:'codUnidadeSaude'})}
+      ${field({num:'', label:'Nome do Investigador', key:'investigadorNome', type:'select', options:INVESTIGADOR_OPTIONS})}
+      ${field({num:'', label:'Função', key:'investigadorFuncao', readOnly:true})}
+      ${field({num:'', label:'Nome do Digitador', key:'investigadorAssinatura'})}
     </div>
   </div>`;
 }
@@ -4522,6 +4635,8 @@ function bindFormEvents(){
       handleAutocomplete(e.target);
     }
   });
+  const pdfInput = document.getElementById('pdfFichaInput');
+  if(pdfInput) pdfInput.addEventListener('change', ()=>handlePdfInput(pdfInput));
   document.querySelectorAll('.ac-list').forEach(list=>{
     list.addEventListener('mousedown', e=>{
       const item = e.target.closest('.ac-item');
@@ -4643,28 +4758,32 @@ function handleAutocomplete(input){
 
 async function saveRecord(){
   syncFormFromDOM();
+  applyInvestigatorDefaults();
   const idx = records.findIndex(r=>r.id===formData.id);
-  if(idx>=0){
-    records[idx] = formData;
-  } else {
-    records.push(formData);
-  }
+  const previousRecord = idx>=0 ? {...records[idx]} : null;
   const btn = document.getElementById('saveRecordBtn');
-  if(btn){ btn.disabled = true; btn.textContent = 'Salvando...'; }
-  const ok = await upsertRecordRemote(formData);
-  if(ok){
-    showToast('Registro salvo com sucesso.');
-    goTo('consulta');
-  } else {
-    if(idx>=0){
-      // idx era o registro original antes da edição local; não temos como restaurar
-      // o valor anterior aqui, então apenas avisamos e deixamos os dados no formulário
-      // para o usuário tentar salvar de novo.
-    } else {
-      records = records.filter(r=>r.id!==formData.id);
+  if(btn){ btn.disabled = true; btn.textContent = pdfAttachmentState.file ? 'Enviando PDF...' : 'Salvando...'; }
+  pdfAttachmentState.loading = true;
+  try{
+    if(pdfAttachmentState.error) throw new Error(pdfAttachmentState.error);
+    if(pdfAttachmentState.file){
+      setPdfStatus('Enviando PDF e preparando o vínculo com a ficha...');
+      formData.pdfFicha = await uploadPdfAttachment(formData.id, pdfAttachmentState.file);
     }
+    if(idx>=0) records[idx] = formData;
+    else records.push(formData);
+    const ok = await upsertRecordRemote(formData);
+    if(!ok) throw new Error('O registro não foi aceito pelo banco de dados.');
+    pdfAttachmentState = {file:null, attachment:formData.pdfFicha || null, loading:false, error:''};
+    showToast(formData.pdfFicha ? 'Registro e PDF salvos com sucesso. Use “Abrir PDF” na lista para confirmar o arquivo.' : 'Registro salvo com sucesso.');
+    goTo('consulta');
+  }catch(error){
+    if(idx>=0 && previousRecord) records[idx] = previousRecord;
+    else records = records.filter(r=>r.id!==formData.id);
+    pdfAttachmentState.loading = false;
     if(btn){ btn.disabled = false; btn.textContent = 'Salvar Registro'; }
-    showToast('Erro: o registro NÃO foi salvo no banco de dados. Verifique sua conexão e tente novamente.');
+    console.error('Falha ao salvar registro e PDF', error);
+    showToast(`Erro ao salvar: ${error.message || 'verifique sua conexão e tente novamente.'}`);
   }
 }
 function fichaLabel(r){
@@ -4700,9 +4819,10 @@ function renderPrint(id){
       ['Causa (CID-10)', r.causaCID10],['Diagnóstico da Lesão (CID-10)', r.diagnosticoLesaoCID10],
       ['Partes do Corpo Atingidas', (r.partesCorpo||[]).join(', ')],
       ['Evolução do Caso', r.evolucaoCaso],['CAT Emitida', r.foiEmitidaCAT==='1'?'Sim':r.foiEmitidaCAT==='2'?'Não':r.foiEmitidaCAT],
-      ['Investigador', r.investigadorNome],
+      ['Investigador', r.investigadorNome],['Secretaria', r.codUnidadeSaude],['Função', r.investigadorFuncao],['Nome do Digitador', r.investigadorAssinatura],
     ])}</table>
     <div style="margin-top:12px"><b>Descrição sumária:</b><br>${esc(r.descricaoSumaria||'—')}</div>` : ''}
+    ${r.pdfFicha ? `<div class="pdf-print-link no-print"><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(r.id)}')">Abrir PDF da ficha</button><span>${esc(r.pdfFicha.name || 'ficha.pdf')}</span></div>` : ''}
   </div>`;
 }
 

@@ -382,3 +382,30 @@ tr:hover td{background:var(--surface-2);}
 .cep-field .hint {
   line-height: 1.35;
 }
+.pdf-upload input[type="file"] {
+  padding: 8px 10px;
+  background: #fff;
+}
+.pdf-upload .hint {
+  line-height: 1.4;
+}
+.pdf-error {
+  color: var(--red, #b64646) !important;
+  font-weight: 600;
+}
+.pdf-existing,
+.pdf-print-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.pdf-action {
+  min-width: 30px;
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 700;
+}
