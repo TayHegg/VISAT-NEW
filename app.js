@@ -2635,7 +2635,7 @@ const BODY_REGIONS = [
   {key:'braco', label:'Pulso/Braço/Cotovelo', view:'front', match:['Membro superior']},
   {key:'perna', label:'Perna/Joelho', view:'back', match:['Membro inferior']},
   {key:'pe', label:'Pé/Tornozelo', view:'back', match:['Pé']},
-  {key:'outros', label:'Outros', view:'back', match:['Todo o corpo','Outro']},
+  {key:'outros', label:'Outros', view:'back', match:['Todo o corpo','Outro','Outros']},
 ];
 const AGRAVO_COLORS = { grave:'var(--c-grave)', biologico:'var(--c-bio)', mental:'var(--c-mental)', lerdort:'var(--c-lerdort)' };
 const AGRAVO_HEX = { grave:'#2E6FB0', biologico:'#D97A2B', mental:'#1B8A72', lerdort:'#7B4FA0' };
@@ -3393,50 +3393,57 @@ function computeBodyRegionCounts(list){
   return {counts, totalHits, impactedCount:impacted.length};
 }
 function bodyFigureSVG(view, counts, max, totalHits){
-  const hx = key => { const c=counts[key]||0; const t=c/max; return t>0.66? '#C6423B': t>0.33? '#E0A526' : t>0? '#2E9E6D' : '#E3E9EC'; };
-  const evt = k => `onmouseenter="showBmTooltip(event,'${k}')" onmouseleave="hideBmTooltip()" onclick="clickBmRegion('${k}')"`;
-  const region = key => BODY_REGIONS.find(b=>b.key===key);
-  const callout = (key, x, y, tx, side) => {
-    const b = region(key); const n = counts[key]||0;
-    const anchor = side==='left' ? 'end' : 'start';
-    const lineX = side==='left' ? tx+8 : tx-8;
-    return `<g class="body-callout" ${evt(key)}><line x1="${x}" y1="${y}" x2="${lineX}" y2="${y}"/><circle cx="${lineX}" cy="${y}" r="3" fill="${hx(key)}"/><text x="${tx}" y="${y-3}" text-anchor="${anchor}">${esc(b.label.toUpperCase())}: ${n}</text><text x="${tx}" y="${y+12}" text-anchor="${anchor}">${pct(n,totalHits)}%</text></g>`;
+  const share = key => totalHits ? (counts[key]||0)/totalHits : 0;
+  const fill = key => {
+    const s = share(key);
+    return s >= .34 ? '#D86B62' : s >= .17 ? '#E7B84D' : s > 0 ? '#76B894' : '#DCE6ED';
   };
-  const base = `<circle cx="160" cy="42" r="23" fill="#D9E2E7" stroke="#AABBC3"/><path d="M145 68c-10 6-16 18-17 34l-9 44c-2 9 5 15 13 11l11-31 3 45-10 73c-1 8 5 12 11 9l13-62 13 62c6 3 12-1 11-9l-10-73 3-45 11 31c8 4 15-2 13-11l-9-44c-1-16-7-28-18-34z" fill="#D9E2E7" stroke="#AABBC3" stroke-linejoin="round"/>`;
-  const body = view==='front' ? `${base}
-    <path class="region" d="M144 72c5-5 27-5 32 0l10 46-8 31h-36l-8-31z" fill="${hx('torax')}" ${evt('torax')}/>
-    <path class="region" d="M131 76l-12 65c-1 8 6 12 13 8l15-55zM189 76l12 65c1 8-6 12-13 8l-15-55z" fill="${hx('braco')}" ${evt('braco')}/>
-    <circle class="region" cx="120" cy="145" r="10" fill="${hx('mao')}" ${evt('mao')}/><circle class="region" cx="200" cy="145" r="10" fill="${hx('mao')}" ${evt('mao')}/>
-    <path class="region" d="M145 149h15v78l-12 48c-2 7-13 5-12-3zM160 149h15l9 123c1 8-10 10-12 3l-12-48z" fill="${hx('perna')}" ${evt('perna')}/>
-    <ellipse class="region" cx="137" cy="278" rx="17" ry="8" fill="${hx('pe')}" ${evt('pe')}/><ellipse class="region" cx="183" cy="278" rx="17" ry="8" fill="${hx('pe')}" ${evt('pe')}/>
-    <circle class="region" cx="160" cy="42" r="23" fill="${hx('cabeca')}" ${evt('cabeca')}/><circle class="region" cx="160" cy="44" r="7" fill="${hx('olho')}" ${evt('olho')}/>` : `${base}
-    <path class="region" d="M144 72c5-5 27-5 32 0l10 46-8 31h-36l-8-31z" fill="${hx('costa')}" ${evt('costa')}/>
-    <path class="region" d="M131 76l-12 65c-1 8 6 12 13 8l15-55zM189 76l12 65c1 8-6 12-13 8l-15-55z" fill="${hx('braco')}" ${evt('braco')}/>
-    <path class="region" d="M145 149h15v78l-12 48c-2 7-13 5-12-3zM160 149h15l9 123c1 8-10 10-12 3l-12-48z" fill="${hx('perna')}" ${evt('perna')}/>
-    <ellipse class="region" cx="137" cy="278" rx="17" ry="8" fill="${hx('pe')}" ${evt('pe')}/><ellipse class="region" cx="183" cy="278" rx="17" ry="8" fill="${hx('pe')}" ${evt('pe')}/>
-    <circle class="region" cx="160" cy="42" r="23" fill="${hx('cabeca')}" ${evt('cabeca')}/>
-    <ellipse class="region" cx="160" cy="174" rx="24" ry="32" fill="${hx('outros')}" opacity=".72" ${evt('outros')}/>`;
-  const callouts = view==='front' ? [
-    callout('olho',153,45,36,'left'), callout('cabeca',160,54,284,'right'), callout('torax',142,104,36,'left'),
-    callout('braco',124,111,284,'right'), callout('mao',119,148,36,'left'), callout('perna',143,213,36,'left'), callout('pe',137,278,284,'right')
-  ] : [
-    callout('cabeca',160,54,36,'left'), callout('costa',142,104,36,'left'), callout('braco',196,111,284,'right'),
-    callout('outros',184,174,284,'right'), callout('perna',177,213,36,'left'), callout('pe',183,278,284,'right')
-  ];
-  return `<svg class="body-figure-svg" viewBox="0 0 320 315" role="img" aria-label="Mapa corporal ${view==='front'?'frontal':'posterior'}">${body}${callouts.join('')}</svg>`;
+  const evt = k => `onmouseenter="showBmTooltip(event,'${k}')" onmouseleave="hideBmTooltip()" onclick="clickBmRegion('${k}')"`;
+  const badge = (key, x, y) => {
+    const n = counts[key]||0;
+    if(!n || !totalHits) return '';
+    return `<g class="body-region-badge ${bmSelectedRegion===key?'selected':''}" ${evt(key)} aria-label="${esc(BODY_REGIONS.find(b=>b.key===key)?.label||key)}: ${pct(n,totalHits)}%"><circle cx="${x}" cy="${y}" r="17"/><text x="${x}" y="${y+4}" text-anchor="middle">${pct(n,totalHits)}%</text></g>`;
+  };
+  const base = `<g class="body-base">
+    <circle cx="180" cy="32" r="22"/>
+    <path d="M170 52h20l4 13c12 2 22 10 27 24l13 52c2 8-4 14-12 11l-14-36-1 33 13 91c1 8-5 13-12 10l-17-73-17 73c-7 3-13-2-12-10l13-91-1-33-14 36c-8 3-14-3-12-11l13-52c5-14 15-22 27-24z"/>
+    <path d="M171 66h18v76h-18z"/>
+    <path d="M169 143h16v91l-13 56c-2 8-14 6-13-3l10-62zM185 143h16l10 62 1 3c1 9-11 11-13 3l-14-56z"/>
+    <ellipse cx="149" cy="296" rx="19" ry="7"/><ellipse cx="211" cy="296" rx="19" ry="7"/>
+  </g>`;
+  const front = `${base}
+    <path class="region" d="M169 67h22c14 3 23 12 25 28l6 38-16 22h-52l-16-22 6-38c2-16 11-25 25-28z" fill="${fill('torax')}" ${evt('torax')}/>
+    <path class="region" d="M153 76l-17 65c-2 8-9 11-15 6-3-2-4-6-3-10l16-61c3-9 9-14 19-16zM207 76l17 65c2 8 9 11 15 6 3-2 4-6 3-10l-16-61c-3-9-9-14-19-16z" fill="${fill('braco')}" ${evt('braco')}/>
+    <circle class="region" cx="123" cy="145" r="11" fill="${fill('mao')}" ${evt('mao')}/><circle class="region" cx="237" cy="145" r="11" fill="${fill('mao')}" ${evt('mao')}/>
+    <path class="region" d="M163 145h17v91l-13 56c-2 8-14 6-13-3l10-62zM180 145h17l10 62 1 3c1 9-11 11-13 3l-14-56z" fill="${fill('perna')}" ${evt('perna')}/>
+    <ellipse class="region" cx="149" cy="296" rx="19" ry="7" fill="${fill('pe')}" ${evt('pe')}/><ellipse class="region" cx="211" cy="296" rx="19" ry="7" fill="${fill('pe')}" ${evt('pe')}/>
+    <ellipse class="region" cx="180" cy="125" rx="17" ry="12" fill="${fill('outros')}" opacity=".78" ${evt('outros')}/>
+    <circle class="region" cx="180" cy="32" r="22" fill="${fill('cabeca')}" ${evt('cabeca')}/><ellipse class="region" cx="171" cy="33" rx="7" ry="5" fill="${fill('olho')}" ${evt('olho')}/>
+    ${badge('olho',143,28)}${badge('cabeca',214,32)}${badge('torax',180,105)}${badge('outros',199,125)}${badge('braco',132,104)}${badge('mao',116,151)}${badge('perna',153,224)}${badge('pe',145,294)}`;
+  const back = `${base}
+    <path class="region" d="M169 67h22c14 3 23 12 25 28l6 38-16 22h-52l-16-22 6-38c2-16 11-25 25-28z" fill="${fill('costa')}" ${evt('costa')}/>
+    <path class="region" d="M153 76l-17 65c-2 8-9 11-15 6-3-2-4-6-3-10l16-61c3-9 9-14 19-16zM207 76l17 65c2 8 9 11 15 6 3-2 4-6 3-10l-16-61c-3-9-9-14-19-16z" fill="${fill('braco')}" ${evt('braco')}/>
+    <path class="region" d="M163 145h17v91l-13 56c-2 8-14 6-13-3l10-62zM180 145h17l10 62 1 3c1 9-11 11-13 3l-14-56z" fill="${fill('perna')}" ${evt('perna')}/>
+    <circle class="region" cx="123" cy="145" r="11" fill="${fill('mao')}" ${evt('mao')}/><circle class="region" cx="237" cy="145" r="11" fill="${fill('mao')}" ${evt('mao')}/>
+    <ellipse class="region" cx="149" cy="296" rx="19" ry="7" fill="${fill('pe')}" ${evt('pe')}/><ellipse class="region" cx="211" cy="296" rx="19" ry="7" fill="${fill('pe')}" ${evt('pe')}/>
+    <circle class="region" cx="180" cy="32" r="22" fill="${fill('cabeca')}" ${evt('cabeca')}/>
+    <ellipse class="region" cx="180" cy="106" rx="25" ry="37" fill="${fill('outros')}" opacity=".78" ${evt('outros')}/>
+    ${badge('cabeca',214,32)}${badge('costa',180,105)}${badge('braco',228,105)}${badge('outros',180,170)}${badge('perna',207,224)}${badge('pe',215,294)}`;
+  return `<svg class="body-figure-svg" viewBox="0 0 360 320" role="img" aria-label="Mapa corporal dinâmico ${view==='front'?'frontal':'posterior'}">${view==='front'?front:back}</svg>`;
 }
 function renderChartBodyMap(list){
   const {counts, totalHits, impactedCount} = computeBodyRegionCounts(list);
   lastBodyRegionData = {counts, totalHits};
+  const max = Math.max(1, ...Object.values(counts));
   return `<div class="chart-panel wide bodymap-panel"><h3>Partes do Corpo Atingida</h3>
     <div class="bodymap-subtitle">${impactedCount ? `${impactedCount} ficha(s) com parte do corpo informada; ${totalHits} área(s) selecionada(s)` : 'Selecione partes do corpo no formulário para visualizar a distribuição.'}</div>
     <div class="bodymap-stage">
-      <div class="bodymap-reference-wrap">
-        <img class="bodymap-reference-image" src="assets/partes-do-corpo-atingida.png" alt="Acidentes por Parte do Corpo, com figuras humanas de frente e de costas e regiões corporais destacadas" />
-        <div class="bodymap-reference-note">Imagem de referência enviada pela usuária. Os valores atuais das fichas estão na legenda ao lado.</div>
+      <div class="bodymap-figures bodymap-dynamic-figures">
+        <div class="bodymap-figure-card"><div class="bodymap-view-label">Frente</div>${bodyFigureSVG('front', counts, max, totalHits)}</div>
+        <div class="bodymap-figure-card"><div class="bodymap-view-label">Costas</div>${bodyFigureSVG('back', counts, max, totalHits)}</div>
       </div>
       <div class="bodymap-summary">
-        <div class="bodymap-summary-title">Dados atuais</div>
+        <div class="bodymap-summary-title">Distribuição atual por região</div>
         ${!totalHits ? '<div class="empty-mini">Sem registros com parte do corpo atingida</div>' : BODY_REGIONS.map(b=>`
           <div class="bm-legend-item ${bmSelectedRegion===b.key?'selected':''}" onmouseenter="showBmTooltip(event,'${b.key}')" onmouseleave="hideBmTooltip()" onclick="clickBmRegion('${b.key}')">
             <span class="region-dot" style="background:${counts[b.key]>0?'#2E9E6D':'#DCE3E6'}"></span>
