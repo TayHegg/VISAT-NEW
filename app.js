@@ -2629,7 +2629,8 @@ const PDF_MAX_BYTES = 8 * 1024 * 1024;
 const BODY_REGIONS = [
   {key:'olho', label:'Olho', view:'front', match:['Olho']},
   {key:'cabeca', label:'Cabeça/Face', view:'front', match:['Cabeça','Pescoço']},
-  {key:'torax', label:'Tórax/Abdome', view:'front', match:['Tórax','Abdome']},
+  {key:'torax', label:'Tórax', view:'front', match:['Tórax','Abdome']},
+  {key:'costa', label:'Costa', view:'back', match:['Costa','Costas']},
   {key:'mao', label:'Dedo/Mão', view:'front', match:['Mão']},
   {key:'braco', label:'Pulso/Braço/Cotovelo', view:'front', match:['Membro superior']},
   {key:'perna', label:'Perna/Joelho', view:'back', match:['Membro inferior']},
@@ -2650,7 +2651,7 @@ const ESCOLARIDADE_LABELS = {'0':'Analfabeto','1':'1ª a 4ª série incompleta E
 
 /* ============================= ESTADO ============================= */
 let records = [];
-let view = 'dashboard';
+let view = 'analytics';
 let editingId = null;
 let formPage = 1;
 let formData = {};
@@ -3216,8 +3217,10 @@ function renderAnalytics(){
         ${renderChartPiramide(filtered)}
       </div>
       <div class="charts-grid">
-        ${renderChartBodyMap(filtered)}
         ${renderChartOcupacoes(filtered)}
+      </div>
+      <div class="charts-grid">
+        ${renderChartBodyMap(filtered)}
         ${renderChartObitos(filtered)}
       </div>
       </div>
@@ -3378,54 +3381,64 @@ function renderChartPiramide(list){
   </div>`;
 }
 function computeBodyRegionCounts(list){
-  const graves = list.filter(r=> r.agravoType==='grave' && Array.isArray(r.partesCorpo) && r.partesCorpo.length);
+  const impacted = list.filter(r=>Array.isArray(r.partesCorpo) && r.partesCorpo.length);
   const counts = {}; BODY_REGIONS.forEach(b=> counts[b.key]=0);
   let totalHits = 0;
-  graves.forEach(r=>{
+  impacted.forEach(r=>{
     r.partesCorpo.forEach(p=>{
-      const region = BODY_REGIONS.find(b=> b.match.includes(p));
+      const region = BODY_REGIONS.find(b=>b.match.includes(p));
       if(region){ counts[region.key]++; totalHits++; }
     });
   });
-  return {counts, totalHits};
+  return {counts, totalHits, impactedCount:impacted.length};
 }
-function bodyFigureSVG(view, counts, max){
-  const hx = key => { const c=counts[key]||0; const t=c/max; return t>0.66? '#C6423B': t>0.33? '#E0A526' : t>0? '#2E9E6D' : '#E8ECED'; };
+function bodyFigureSVG(view, counts, max, totalHits){
+  const hx = key => { const c=counts[key]||0; const t=c/max; return t>0.66? '#C6423B': t>0.33? '#E0A526' : t>0? '#2E9E6D' : '#E3E9EC'; };
   const evt = k => `onmouseenter="showBmTooltip(event,'${k}')" onmouseleave="hideBmTooltip()" onclick="clickBmRegion('${k}')"`;
-  if(view==='front'){
-    return `<svg width="100" height="210" viewBox="0 0 110 230">
-      <rect x="35" y="116" width="40" height="60" rx="10" fill="#F2F5F6" stroke="#DCE3E6"/>
-      <rect class="region" data-region="braco" x="8" y="50" width="18" height="80" rx="9" fill="${hx('braco')}" ${evt('braco')}/>
-      <rect class="region" data-region="braco" x="84" y="50" width="18" height="80" rx="9" fill="${hx('braco')}" ${evt('braco')}/>
-      <circle class="region" data-region="mao" cx="17" cy="136" r="10" fill="${hx('mao')}" ${evt('mao')}/>
-      <circle class="region" data-region="mao" cx="93" cy="136" r="10" fill="${hx('mao')}" ${evt('mao')}/>
-      <rect class="region" data-region="torax" x="30" y="46" width="50" height="70" rx="12" fill="${hx('torax')}" ${evt('torax')}/>
-      <circle class="region" data-region="cabeca" cx="55" cy="26" r="16" fill="${hx('cabeca')}" ${evt('cabeca')}/>
-      <circle class="region" data-region="olho" cx="55" cy="26" r="4" fill="${hx('olho')}" ${evt('olho')}/>
-    </svg>`;
-  }
-  return `<svg width="100" height="210" viewBox="0 0 110 230">
-    <circle cx="55" cy="26" r="16" fill="#F2F5F6" stroke="#DCE3E6"/>
-    <rect x="30" y="46" width="50" height="70" rx="12" fill="#F2F5F6" stroke="#DCE3E6"/>
-    <rect x="8" y="50" width="18" height="80" rx="9" fill="#F2F5F6" stroke="#DCE3E6"/>
-    <rect x="84" y="50" width="18" height="80" rx="9" fill="#F2F5F6" stroke="#DCE3E6"/>
-    <rect class="region" data-region="perna" x="34" y="116" width="18" height="80" rx="9" fill="${hx('perna')}" ${evt('perna')}/>
-    <rect class="region" data-region="perna" x="58" y="116" width="18" height="80" rx="9" fill="${hx('perna')}" ${evt('perna')}/>
-    <ellipse class="region" data-region="pe" cx="43" cy="205" rx="12" ry="8" fill="${hx('pe')}" ${evt('pe')}/>
-    <ellipse class="region" data-region="pe" cx="67" cy="205" rx="12" ry="8" fill="${hx('pe')}" ${evt('pe')}/>
-  </svg>`;
+  const region = key => BODY_REGIONS.find(b=>b.key===key);
+  const callout = (key, x, y, tx, side) => {
+    const b = region(key); const n = counts[key]||0;
+    const anchor = side==='left' ? 'end' : 'start';
+    const lineX = side==='left' ? tx+8 : tx-8;
+    return `<g class="body-callout" ${evt(key)}><line x1="${x}" y1="${y}" x2="${lineX}" y2="${y}"/><circle cx="${lineX}" cy="${y}" r="3" fill="${hx(key)}"/><text x="${tx}" y="${y-3}" text-anchor="${anchor}">${esc(b.label.toUpperCase())}: ${n}</text><text x="${tx}" y="${y+12}" text-anchor="${anchor}">${pct(n,totalHits)}%</text></g>`;
+  };
+  const base = `<circle cx="160" cy="42" r="23" fill="#D9E2E7" stroke="#AABBC3"/><path d="M145 68c-10 6-16 18-17 34l-9 44c-2 9 5 15 13 11l11-31 3 45-10 73c-1 8 5 12 11 9l13-62 13 62c6 3 12-1 11-9l-10-73 3-45 11 31c8 4 15-2 13-11l-9-44c-1-16-7-28-18-34z" fill="#D9E2E7" stroke="#AABBC3" stroke-linejoin="round"/>`;
+  const body = view==='front' ? `${base}
+    <path class="region" d="M144 72c5-5 27-5 32 0l10 46-8 31h-36l-8-31z" fill="${hx('torax')}" ${evt('torax')}/>
+    <path class="region" d="M131 76l-12 65c-1 8 6 12 13 8l15-55zM189 76l12 65c1 8-6 12-13 8l-15-55z" fill="${hx('braco')}" ${evt('braco')}/>
+    <circle class="region" cx="120" cy="145" r="10" fill="${hx('mao')}" ${evt('mao')}/><circle class="region" cx="200" cy="145" r="10" fill="${hx('mao')}" ${evt('mao')}/>
+    <path class="region" d="M145 149h15v78l-12 48c-2 7-13 5-12-3zM160 149h15l9 123c1 8-10 10-12 3l-12-48z" fill="${hx('perna')}" ${evt('perna')}/>
+    <ellipse class="region" cx="137" cy="278" rx="17" ry="8" fill="${hx('pe')}" ${evt('pe')}/><ellipse class="region" cx="183" cy="278" rx="17" ry="8" fill="${hx('pe')}" ${evt('pe')}/>
+    <circle class="region" cx="160" cy="42" r="23" fill="${hx('cabeca')}" ${evt('cabeca')}/><circle class="region" cx="160" cy="44" r="7" fill="${hx('olho')}" ${evt('olho')}/>` : `${base}
+    <path class="region" d="M144 72c5-5 27-5 32 0l10 46-8 31h-36l-8-31z" fill="${hx('costa')}" ${evt('costa')}/>
+    <path class="region" d="M131 76l-12 65c-1 8 6 12 13 8l15-55zM189 76l12 65c1 8-6 12-13 8l-15-55z" fill="${hx('braco')}" ${evt('braco')}/>
+    <path class="region" d="M145 149h15v78l-12 48c-2 7-13 5-12-3zM160 149h15l9 123c1 8-10 10-12 3l-12-48z" fill="${hx('perna')}" ${evt('perna')}/>
+    <ellipse class="region" cx="137" cy="278" rx="17" ry="8" fill="${hx('pe')}" ${evt('pe')}/><ellipse class="region" cx="183" cy="278" rx="17" ry="8" fill="${hx('pe')}" ${evt('pe')}/>
+    <circle class="region" cx="160" cy="42" r="23" fill="${hx('cabeca')}" ${evt('cabeca')}/>
+    <ellipse class="region" cx="160" cy="174" rx="24" ry="32" fill="${hx('outros')}" opacity=".72" ${evt('outros')}/>`;
+  const callouts = view==='front' ? [
+    callout('olho',153,45,36,'left'), callout('cabeca',160,54,284,'right'), callout('torax',142,104,36,'left'),
+    callout('braco',124,111,284,'right'), callout('mao',119,148,36,'left'), callout('perna',143,213,36,'left'), callout('pe',137,278,284,'right')
+  ] : [
+    callout('cabeca',160,54,36,'left'), callout('costa',142,104,36,'left'), callout('braco',196,111,284,'right'),
+    callout('outros',184,174,284,'right'), callout('perna',177,213,36,'left'), callout('pe',183,278,284,'right')
+  ];
+  return `<svg class="body-figure-svg" viewBox="0 0 320 315" role="img" aria-label="Mapa corporal ${view==='front'?'frontal':'posterior'}">${body}${callouts.join('')}</svg>`;
 }
 function renderChartBodyMap(list){
-  const {counts, totalHits} = computeBodyRegionCounts(list);
+  const {counts, totalHits, impactedCount} = computeBodyRegionCounts(list);
   lastBodyRegionData = {counts, totalHits};
   const max = Math.max(1, ...Object.values(counts));
-  return `<div class="chart-panel wide"><h3>Partes do Corpo Atingida <span style="font-weight:400;text-transform:none;color:var(--text-muted)">(Acid. Grave)</span></h3>
-    <div class="bodymap-wrap">
-      <div>${bodyFigureSVG('front', counts, max)}<div class="bodymap-figure-label">Frente</div></div>
-      <div>${bodyFigureSVG('back', counts, max)}<div class="bodymap-figure-label">Costas</div></div>
-      <div>
-        ${!totalHits? '<div class="empty-mini">Sem registros com parte do corpo atingida</div>' : BODY_REGIONS.map(b=>`
-          <div class="bm-legend-item" onmouseenter="showBmTooltip(event,'${b.key}')" onmouseleave="hideBmTooltip()" onclick="clickBmRegion('${b.key}')">
+  return `<div class="chart-panel wide bodymap-panel"><h3>Partes do Corpo Atingida</h3>
+    <div class="bodymap-subtitle">${impactedCount ? `${impactedCount} ficha(s) com parte do corpo informada; ${totalHits} área(s) selecionada(s)` : 'Selecione partes do corpo no formulário para visualizar a distribuição.'}</div>
+    <div class="bodymap-stage">
+      <div class="bodymap-figures">
+        <div class="bodymap-figure-card">${bodyFigureSVG('front', counts, max, totalHits)}<div class="bodymap-figure-label">Frente</div></div>
+        <div class="bodymap-figure-card">${bodyFigureSVG('back', counts, max, totalHits)}<div class="bodymap-figure-label">Costas</div></div>
+      </div>
+      <div class="bodymap-summary">
+        ${!totalHits ? '<div class="empty-mini">Sem registros com parte do corpo atingida</div>' : BODY_REGIONS.map(b=>`
+          <div class="bm-legend-item ${bmSelectedRegion===b.key?'selected':''}" onmouseenter="showBmTooltip(event,'${b.key}')" onmouseleave="hideBmTooltip()" onclick="clickBmRegion('${b.key}')">
             <span class="region-dot" style="background:${counts[b.key]>0?'#2E9E6D':'#DCE3E6'}"></span>
             <span class="lbl">${esc(b.label)}</span>
             <span class="qty">${counts[b.key]}</span>
@@ -3451,18 +3464,58 @@ function showBmTooltip(evt, key){
 function hideBmTooltip(){ const tip = document.getElementById('bmTooltip'); if(tip) tip.style.display='none'; }
 function clickBmRegion(key){
   const region = BODY_REGIONS.find(b=>b.key===key);
+  if(!region) return;
   const n = lastBodyRegionData.counts[key]||0;
   const total = lastBodyRegionData.totalHits||0;
-  showToast(`${region.label}: ${n} ocorrência(s) — ${pct(n,total)}% dos registros com parte do corpo atingida informada`);
+  bmSelectedRegion = bmSelectedRegion===key ? null : key;
+  render();
+  showToast(`${region.label}: ${n} ocorrência(s) — ${pct(n,total)}% das áreas informadas`);
+}
+function occupationIconSvg(label){
+  const text = normalizeSearchText(label);
+  if(text.includes('motocic') || text.includes('motoboy') || text.includes('motofret')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><circle cx="9" cy="27" r="4"/><circle cx="27" cy="27" r="4"/><path d="M9 23l5-10 7 2 4-5 5 2M14 13l5 10h8M19 10l3-3"/></svg>`;
+  }
+  if(text.includes('pedreiro') || text.includes('servente') || text.includes('obra')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M5 29h26M8 25l7-10 8 4 6-8M13 18l7 4M25 11l4 4"/></svg>`;
+  }
+  if(text.includes('soldador')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M11 29c0-8 3-13 9-15 5-1 8 2 8 7M14 18l-7 8M7 26l4 3M21 13l5-5M25 11l4 2"/></svg>`;
+  }
+  if(text.includes('acougue')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M6 29L30 7M6 7l24 22M10 9l3-3M26 27l3 3"/></svg>`;
+  }
+  if(text.includes('cozin')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M8 17h20v12H8zM7 17c0-4 3-6 6-5 1-4 7-5 9 0 4-1 7 2 7 5M13 29v3M23 29v3"/></svg>`;
+  }
+  if(text.includes('repositor') || text.includes('mercador')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M6 25h23l-2 6H9zM9 25V8h12v17M21 12h7v13M12 12h5M12 17h5M32 28v5M29 30h6"/></svg>`;
+  }
+  if(text.includes('faxine') || text.includes('coletor') || text.includes('limpeza')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M18 5v22M12 27h12M8 31h20M9 18l6 7M27 18l-6 7M9 18h6M27 18h-6"/></svg>`;
+  }
+  return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="10" r="5"/><path d="M8 31c0-7 4-11 10-11s10 4 10 11M12 23l-4 5M24 23l4 5"/></svg>`;
 }
 function renderChartOcupacoes(list){
-  const counts = {};
-  list.forEach(r=>{ const o = r.ocupacao || 'Não informado'; counts[o]=(counts[o]||0)+1; });
-  const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  const max = Math.max(1, ...top.map(t=>t[1]));
-  return `<div class="chart-panel"><h3>Principais Ocupações por Acidente</h3>
-    ${top.length? top.map(([o,n])=>`<div class="bar-row"><div class="lbl" title="${esc(o)}">${esc(o)}</div><div class="track"><div class="fill" style="width:${n/max*100}%;background:var(--accent)"></div></div><div class="val">${n} (${pct(n,list.length)}%)</div></div>`).join('') : '<div class="empty-mini">Sem dados</div>'}
-  </div>`;
+  const bands = Object.entries(AGRAVOS).map(([key,meta])=>{
+    const totalType = list.filter(r=>r.agravoType===key).length;
+    const counts = {};
+    list.filter(r=>r.agravoType===key).forEach(r=>{
+      const raw = String(r.ocupacao || '').trim();
+      const label = raw && normalizeSearchText(raw) !== 'nao informado' ? raw : 'Ignorado';
+      counts[label] = (counts[label]||0) + 1;
+    });
+    const top = Object.entries(counts).sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0],'pt-BR')).slice(0,10);
+    return `<div class="occupation-strip ${key}">
+      <div class="occupation-strip-head"><span class="occupation-strip-dot" style="background:${AGRAVO_HEX[key]}"></span><span>${esc(meta.label)}</span><strong>${totalType}</strong></div>
+      ${top.length ? `<div class="occupation-strip-list">${top.map(([occupation,n])=>`<div class="occupation-item" title="${esc(occupation)} — ${n} ocorrência(s)">
+        <div class="occupation-circle" style="color:${AGRAVO_HEX[key]}">${occupationIconSvg(occupation)}</div>
+        <div class="occupation-name">${esc(occupation)}</div>
+        <div class="occupation-value">${n} (${pct(n,totalType)}%)</div>
+      </div>`).join('')}</div>` : '<div class="occupation-empty">Sem registros para este tipo de agravo nos filtros aplicados.</div>'}
+    </div>`;
+  }).join('');
+  return `<div class="chart-panel wide wide-occupations"><h3>Principais Ocupações por Acidente</h3><div class="occupation-bands">${bands}</div></div>`;
 }
 function renderChartObitos(list){
   const obitos = list.filter(isObito);

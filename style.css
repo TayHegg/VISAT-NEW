@@ -409,3 +409,52 @@ tr:hover td{background:var(--surface-2);}
   font-size: 10px;
   font-weight: 700;
 }
+
+/* Dashboard Analítico — ocupações por agravo e mapa corporal */
+.chart-panel.wide-occupations{grid-column:1 / -1;}
+.occupation-bands{display:flex;flex-direction:column;gap:12px;}
+.occupation-strip{border:1px solid var(--border);border-left:4px solid var(--primary-2);border-radius:10px;background:linear-gradient(90deg,rgba(245,248,249,.98),rgba(255,255,255,.98));padding:10px 12px 12px;}
+.occupation-strip.grave{border-left-color:#2E6FB0;}
+.occupation-strip.biologico{border-left-color:#D97A2B;}
+.occupation-strip.mental{border-left-color:#1B8A72;}
+.occupation-strip.lerdort{border-left-color:#7B4FA0;}
+.occupation-strip-head{display:flex;align-items:center;gap:7px;margin-bottom:9px;color:var(--primary-2);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.035em;}
+.occupation-strip-head strong{margin-left:auto;font-family:var(--font-mono);font-size:13px;color:var(--text);}
+.occupation-strip-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;}
+.occupation-strip-list{display:grid;grid-template-columns:repeat(10,minmax(70px,1fr));gap:8px;align-items:start;}
+.occupation-item{min-width:0;text-align:center;cursor:default;}
+.occupation-circle{width:58px;height:58px;margin:0 auto 6px;border-radius:50%;background:#D9DDE1;display:flex;align-items:center;justify-content:center;transition:transform .15s ease,box-shadow .15s ease;}
+.occupation-item:hover .occupation-circle{transform:translateY(-2px);box-shadow:0 4px 12px rgba(22,38,44,.15);}
+.occupation-icon-svg{width:42px;height:42px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;}
+.occupation-name{min-height:31px;color:var(--text);font-size:9px;line-height:1.15;font-weight:800;text-transform:uppercase;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;}
+.occupation-value{margin-top:4px;color:var(--text-muted);font-family:var(--font-mono);font-size:10px;font-weight:700;white-space:nowrap;}
+.occupation-empty{padding:12px 4px;color:var(--text-muted);font-size:11px;}
+.chart-panel.bodymap-panel{min-height:380px;grid-column:1 / -1;}
+.bodymap-subtitle{margin:-4px 0 10px;color:var(--text-muted);font-size:10.5px;}
+.bodymap-stage{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(220px,.8fr);gap:14px;align-items:center;flex:1;}
+.bodymap-figures{display:flex;justify-content:center;gap:10px;min-width:0;}
+.bodymap-figure-card{min-width:0;flex:1;}
+.body-figure-svg{display:block;width:100%;height:auto;min-height:250px;overflow:visible;}
+.body-figure-svg .region{cursor:pointer;stroke:#94A8B2;stroke-width:1.15;transition:filter .15s ease,stroke-width .15s ease;}
+.body-figure-svg .region:hover{filter:brightness(.88);stroke:#16262C;stroke-width:2.2;}
+.body-callout{cursor:pointer;}
+.body-callout line{stroke:#94A8B2;stroke-width:1;}
+.body-callout text{fill:var(--text);font-size:8.5px;font-family:var(--font-body);font-weight:800;letter-spacing:.02em;}
+.body-callout text+text{fill:var(--text-muted);font-family:var(--font-mono);font-weight:700;font-size:8.5px;}
+.bodymap-summary{display:flex;flex-direction:column;gap:3px;}
+.bodymap-summary .bm-legend-item{display:grid;grid-template-columns:10px minmax(0,1fr) auto auto;gap:6px;align-items:center;padding:6px 7px;border-radius:7px;cursor:pointer;transition:background .15s ease;}
+.bodymap-summary .bm-legend-item:hover,.bodymap-summary .bm-legend-item.selected{background:var(--surface-2);}
+.bodymap-summary .bm-legend-item .lbl{font-size:10px;line-height:1.15;}
+.bodymap-summary .bm-legend-item .qty,.bodymap-summary .bm-legend-item .pct{font-family:var(--font-mono);font-size:10px;font-weight:700;}
+@media (max-width:1250px){
+  .occupation-strip-list{grid-template-columns:repeat(5,minmax(70px,1fr));row-gap:13px;}
+  .bodymap-stage{grid-template-columns:1fr;}
+  .bodymap-figures{max-width:760px;margin:0 auto;width:100%;}
+  .bodymap-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));}
+}
+@media (max-width:640px){
+  .occupation-strip-list{grid-template-columns:repeat(2,minmax(80px,1fr));}
+  .bodymap-figures{gap:0;}
+  .body-figure-svg{min-height:205px;}
+  .bodymap-summary{grid-template-columns:1fr 1fr;}
+}
