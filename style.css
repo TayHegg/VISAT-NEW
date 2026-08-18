@@ -426,6 +426,7 @@ tr:hover td{background:var(--surface-2);}
 .occupation-circle{width:58px;height:58px;margin:0 auto 6px;border-radius:50%;background:#D9DDE1;display:flex;align-items:center;justify-content:center;transition:transform .15s ease,box-shadow .15s ease;}
 .occupation-item:hover .occupation-circle{transform:translateY(-2px);box-shadow:0 4px 12px rgba(22,38,44,.15);}
 .occupation-icon-svg{width:42px;height:42px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;}
+.occupation-cnae{min-height:14px;color:var(--text);font-family:var(--font-mono);font-size:8.5px;line-height:1.1;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .occupation-name{min-height:31px;color:var(--text);font-size:9px;line-height:1.15;font-weight:800;text-transform:uppercase;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;}
 .occupation-value{margin-top:4px;color:var(--text-muted);font-family:var(--font-mono);font-size:10px;font-weight:700;white-space:nowrap;}
 .occupation-empty{padding:12px 4px;color:var(--text-muted);font-size:11px;}

@@ -3489,6 +3489,21 @@ function occupationIconSvg(label){
   if(text.includes('soldador')){
     return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M11 29c0-8 3-13 9-15 5-1 8 2 8 7M14 18l-7 8M7 26l4 3M21 13l5-5M25 11l4 2"/></svg>`;
   }
+  if(text.includes('enferm') || text.includes('enfermeir') || text.includes('tecnico de enfermagem')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="8" r="4"/><path d="M10 31c0-8 3-13 8-13s8 5 8 13M18 20v7M14 23h8M25 9h6M28 6v6"/></svg>`;
+  }
+  if(text.includes('polic') || text.includes('segur') || text.includes('vigil')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M18 4l11 4v8c0 8-5 13-11 16C12 29 7 24 7 16V8zM12 17l4 4 8-9M14 4h8"/></svg>`;
+  }
+  if(text.includes('motorista') || text.includes('condutor')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M6 24l3-10h18l3 10M5 24h26v6H5zM10 30v3M26 30v3M11 19h14M10 25h3M23 25h3"/></svg>`;
+  }
+  if(text.includes('eletric')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M20 4L9 20h8l-2 12 12-17h-8zM6 11h5M25 11h5M18 1v5"/></svg>`;
+  }
+  if(text.includes('vendedor') || text.includes('comerc') || text.includes('balcon')){
+    return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M6 15h24l-3-8H9zM8 15v16h20V15M13 21h10M13 26h6"/></svg>`;
+  }
   if(text.includes('acougue')){
     return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><path d="M6 29L30 7M6 7l24 22M10 9l3-3M26 27l3 3"/></svg>`;
   }
@@ -3503,22 +3518,36 @@ function occupationIconSvg(label){
   }
   return `<svg class="occupation-icon-svg" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="10" r="5"/><path d="M8 31c0-7 4-11 10-11s10 4 10 11M12 23l-4 5M24 23l4 5"/></svg>`;
 }
+function formatCnaeDisplay(value){
+  const raw = String(value || '').trim();
+  if(!raw || normalizeSearchText(raw) === 'nao informado') return 'CNAE não informado';
+  const code = raw.match(/(\d{2})\.?([0-9]{2}-\d)/);
+  return code ? `${code[1]}${code[2]}` : raw;
+}
+function occupationRecordIdentity(record){
+  const rawOccupation = String(record.ocupacao || '').trim();
+  const occupation = rawOccupation && normalizeSearchText(rawOccupation) !== 'nao informado' ? rawOccupation : 'Ignorado';
+  const cnae = formatCnaeDisplay(record.cnae);
+  return {cnae, occupation, key:`${cnae}::${occupation}`};
+}
 function renderChartOcupacoes(list){
   const bands = Object.entries(AGRAVOS).map(([key,meta])=>{
-    const totalType = list.filter(r=>r.agravoType===key).length;
-    const counts = {};
-    list.filter(r=>r.agravoType===key).forEach(r=>{
-      const raw = String(r.ocupacao || '').trim();
-      const label = raw && normalizeSearchText(raw) !== 'nao informado' ? raw : 'Ignorado';
-      counts[label] = (counts[label]||0) + 1;
+    const rows = new Map();
+    const typeRecords = list.filter(r=>r.agravoType===key);
+    typeRecords.forEach(record=>{
+      const identity = occupationRecordIdentity(record);
+      const current = rows.get(identity.key) || {...identity, count:0};
+      current.count += 1;
+      rows.set(identity.key, current);
     });
-    const top = Object.entries(counts).sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0],'pt-BR')).slice(0,10);
+    const top = [...rows.values()].sort((a,b)=>b.count-a.count || a.occupation.localeCompare(b.occupation,'pt-BR') || a.cnae.localeCompare(b.cnae,'pt-BR')).slice(0,10);
     return `<div class="occupation-strip ${key}">
-      <div class="occupation-strip-head"><span class="occupation-strip-dot" style="background:${AGRAVO_HEX[key]}"></span><span>${esc(meta.label)}</span><strong>${totalType}</strong></div>
-      ${top.length ? `<div class="occupation-strip-list">${top.map(([occupation,n])=>`<div class="occupation-item" title="${esc(occupation)} — ${n} ocorrência(s)">
-        <div class="occupation-circle" style="color:${AGRAVO_HEX[key]}">${occupationIconSvg(occupation)}</div>
-        <div class="occupation-name">${esc(occupation)}</div>
-        <div class="occupation-value">${n} (${pct(n,totalType)}%)</div>
+      <div class="occupation-strip-head"><span class="occupation-strip-dot" style="background:${AGRAVO_HEX[key]}"></span><span>${esc(meta.label)}</span><strong>${typeRecords.length}</strong></div>
+      ${top.length ? `<div class="occupation-strip-list">${top.map(item=>`<div class="occupation-item" title="${esc(item.cnae)} — ${esc(item.occupation)} — ${item.count} ocorrência(s)">
+        <div class="occupation-circle" style="color:${AGRAVO_HEX[key]}">${occupationIconSvg(item.occupation)}</div>
+        <div class="occupation-cnae">${esc(item.cnae)}</div>
+        <div class="occupation-name">${esc(item.occupation)}</div>
+        <div class="occupation-value">${item.count} (${pct(item.count,typeRecords.length)}%)</div>
       </div>`).join('')}</div>` : '<div class="occupation-empty">Sem registros para este tipo de agravo nos filtros aplicados.</div>'}
     </div>`;
   }).join('');
