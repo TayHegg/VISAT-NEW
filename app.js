@@ -3995,7 +3995,7 @@ function autocompleteField(opts){
   const {num, label, key, db, required=false, hint} = opts;
   const val = formData[key] ?? '';
   const placeholder = db === 'cid' ? 'Digite o CID, ex.: S500' : 'Digite o código ou a descrição...';
-  const cidDescription = db === 'cid' ? `<div class="cid-description" id="cid-desc-${key}" aria-live="polite">${esc(cidDescriptionForValue(val))}</div>` : '';
+  const cidDescription = db === 'cid' ? `<div class="cid-description" id="cid-desc-${key}" aria-live="polite">${esc(cidDescriptionForValue(val) ? `CID selecionado: ${cidDescriptionForValue(val)}` : '')}</div>` : '';
   return `<div class="field span2 autocomplete">
     <label>${num?`<span class="num">${num}.</span>`:''}${esc(label)} ${required?'<span class="req">*</span>':''}</label>
     <input type="text" data-k="${key}" data-ac="${db}" value="${esc(val)}" placeholder="${placeholder}" autocomplete="off" inputmode="${db === 'cid' ? 'text' : 'text'}">
@@ -4568,7 +4568,7 @@ function updateCidDescription(input){
   if(!box) return;
   const code = normalizeCidCode(input.value);
   const description = cidDescriptionForValue(input.value);
-  box.textContent = description || (code.length >= 3 ? 'CID não localizado na base oficial do DATASUS.' : '');
+  box.textContent = description ? `CID selecionado: ${description}` : (code.length >= 3 ? 'CID não localizado na base oficial do DATASUS.' : '');
   box.classList.toggle('has-value', Boolean(description));
 }
 let cepLookupToken = 0;
