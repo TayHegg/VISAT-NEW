@@ -458,3 +458,16 @@ tr:hover td{background:var(--surface-2);}
   .body-figure-svg{min-height:205px;}
   .bodymap-summary{grid-template-columns:1fr 1fr;}
 }
+
+/* Mapa corporal: imagem original enviada pela usuária */
+.bodymap-reference-wrap{display:flex;flex-direction:column;align-items:center;min-width:0;width:100%;}
+.bodymap-reference-image{display:block;width:100%;max-width:517px;height:auto;object-fit:contain;border-radius:6px;box-shadow:0 1px 5px rgba(22,38,44,.10);}
+.bodymap-reference-note{max-width:517px;margin-top:7px;color:var(--text-muted);font-size:9.5px;line-height:1.35;text-align:center;}
+.bodymap-summary-title{margin:0 0 5px;color:var(--primary-2);font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;}
+@media (max-width:1250px){
+  .bodymap-reference-image{max-width:517px;}
+}
+@media (max-width:640px){
+  .bodymap-reference-image{max-width:100%;}
+  .bodymap-reference-note{font-size:9px;}
+}

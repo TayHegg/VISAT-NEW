@@ -3428,15 +3428,15 @@ function bodyFigureSVG(view, counts, max, totalHits){
 function renderChartBodyMap(list){
   const {counts, totalHits, impactedCount} = computeBodyRegionCounts(list);
   lastBodyRegionData = {counts, totalHits};
-  const max = Math.max(1, ...Object.values(counts));
   return `<div class="chart-panel wide bodymap-panel"><h3>Partes do Corpo Atingida</h3>
     <div class="bodymap-subtitle">${impactedCount ? `${impactedCount} ficha(s) com parte do corpo informada; ${totalHits} área(s) selecionada(s)` : 'Selecione partes do corpo no formulário para visualizar a distribuição.'}</div>
     <div class="bodymap-stage">
-      <div class="bodymap-figures">
-        <div class="bodymap-figure-card">${bodyFigureSVG('front', counts, max, totalHits)}<div class="bodymap-figure-label">Frente</div></div>
-        <div class="bodymap-figure-card">${bodyFigureSVG('back', counts, max, totalHits)}<div class="bodymap-figure-label">Costas</div></div>
+      <div class="bodymap-reference-wrap">
+        <img class="bodymap-reference-image" src="assets/partes-do-corpo-atingida.png" alt="Acidentes por Parte do Corpo, com figuras humanas de frente e de costas e regiões corporais destacadas" />
+        <div class="bodymap-reference-note">Imagem de referência enviada pela usuária. Os valores atuais das fichas estão na legenda ao lado.</div>
       </div>
       <div class="bodymap-summary">
+        <div class="bodymap-summary-title">Dados atuais</div>
         ${!totalHits ? '<div class="empty-mini">Sem registros com parte do corpo atingida</div>' : BODY_REGIONS.map(b=>`
           <div class="bm-legend-item ${bmSelectedRegion===b.key?'selected':''}" onmouseenter="showBmTooltip(event,'${b.key}')" onmouseleave="hideBmTooltip()" onclick="clickBmRegion('${b.key}')">
             <span class="region-dot" style="background:${counts[b.key]>0?'#2E9E6D':'#DCE3E6'}"></span>
