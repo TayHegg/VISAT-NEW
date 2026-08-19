@@ -2876,14 +2876,17 @@ const REQUIRED_MENTAL = ['dataDiagnosticoMental','regimeTratamentoMental'];
 const REQUIRED_BIOLOGICO = ['dataAcidenteBio','tipoExposicao','materialOrganico'];
 
 function isEmpty(v){ return v==null || v==='' || (Array.isArray(v) && v.length===0); }
-// Registros importados das planilhas oficiais de 2026 representam fichas já
+// Registros importados das planilhas oficiais representam fichas já
 // encerradas na origem. Eles continuam com os dados originais, mas não devem
 // gerar pendências operacionais no Painel ou na Consulta de Fichas.
+function isImportedRecord(r){
+  return /^excel20(25|26)-/.test(String(r?.id || ''));
+}
 function isImported2026Record(r){
   return String(r?.id || '').startsWith('excel2026-');
 }
 function computeAlerts(r){
-  if(isImported2026Record(r)) return [{level:'green', code:'importado_sem_pendencia', label:'Sem pendências identificadas'}];
+  if(isImportedRecord(r)) return [{level:'green', code:'importado_sem_pendencia', label:'Sem pendências identificadas'}];
   const alerts = [];
   const missingCommon = REQUIRED_COMMON.filter(f => isEmpty(r[f]));
   let missingType = [];
