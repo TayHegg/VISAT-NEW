@@ -2657,7 +2657,7 @@ let formPage = 1;
 let formData = {};
 let pdfAttachmentState = {file:null, attachment:null, loading:false, error:''};
 let tableState = { search:'', sortKey:'fichaNumero', sortDir:1, filterAgravo:'', filterStatus:'', filterSituacao:'', page:1, pageSize:10 };
-let dashFilters = { ano:'', periodoIni:'', periodoFim:'', mes:'', agravo:'', unidade:'', municipio:'', bairro:'', ocupacao:'', sexo:'', racaCor:'', escolaridade:'', tipoAcidente:'', status:'', obito:'' };
+let dashFilters = { ano:'2026', periodoIni:'', periodoFim:'', mes:'', agravo:'', unidade:'', municipio:'', bairro:'', ocupacao:'', sexo:'', racaCor:'', escolaridade:'', tipoAcidente:'', status:'', obito:'' };
 let bmSelectedRegion = null;
 let pendingDeleteId = null;
 let dashboardCardFilter = '';
@@ -2726,6 +2726,10 @@ const APP_SHELL_HTML = `
     <div class="nav-item" data-view="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>Painel</div>
     <div class="nav-item" data-view="consulta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Consulta de Fichas</div>
     <div class="nav-item" data-view="form"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Novo Registro</div>
+    <div class="nav-group-title">Anos anteriores</div>
+    <div class="nav-item nav-subitem" data-view="analytics2025"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>Dashboard 2025</div>
+    <div class="nav-item nav-subitem" data-view="analytics2024"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>Dashboard 2024</div>
+    <div class="nav-item nav-subitem" data-view="comparison"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16"/><path d="M8 15l3-4 3 2 4-6"/></svg>Comparativo anual</div>
     <div class="foot" id="sidebarFoot">4 fichas oficiais do SINAN implementadas: Acidente Grave, Exposição a Material Biológico, Transtorno Mental e LER/DORT.</div>
   </aside>
 
@@ -2966,6 +2970,7 @@ function showToast(msg){
 /* ============================= NAVEGAÇÃO ============================= */
 function goTo(v, id){
   view = v;
+  if(v==='analytics2025' || v==='analytics2024') analyticsCardFilter = null;
   if(v==='form'){
     editingId = id || null;
     formPage = 1;
@@ -2985,6 +2990,9 @@ function render(){
   const titles = {
     dashboard:['Painel','Visão geral das notificações e pendências'],
     analytics:['Dashboard Analítico','Painel de Controle de Acidentes e Agravos Relacionados ao Trabalho'],
+    analytics2025:['Dashboard 2025','Painel anual independente de 2025'],
+    analytics2024:['Dashboard 2024','Painel anual independente de 2024'],
+    comparison:['Comparativo anual','Comparação dos indicadores por ano'],
     consulta:['Consulta de Fichas','Buscar, filtrar e gerenciar notificações registradas'],
     form:[editingId? 'Editar Registro':'Novo Registro','Ficha de Investigação — Acidente de Trabalho'],
     print:['Visualizar / Imprimir','Ficha de Investigação — Acidente de Trabalho'],
@@ -2994,12 +3002,15 @@ function render(){
   const c = document.getElementById('content');
   if(view==='dashboard') c.innerHTML = renderDashboard();
   else if(view==='analytics') c.innerHTML = renderAnalytics();
+  else if(view==='analytics2025') c.innerHTML = renderAnalytics('2025');
+  else if(view==='analytics2024') c.innerHTML = renderAnalytics('2024');
+  else if(view==='comparison') c.innerHTML = renderAnnualComparison();
   else if(view==='consulta') c.innerHTML = renderConsulta();
   else if(view==='form') c.innerHTML = renderForm();
   else if(view==='print') c.innerHTML = renderPrint(editingId);
   if(view==='form') bindFormEvents();
   if(view==='consulta') bindConsultaEvents();
-  if(view==='analytics') bindAnalyticsEvents();
+  if(view==='analytics' || view==='analytics2025' || view==='analytics2024') bindAnalyticsEvents();
 }
 
 /* ============================= DASHBOARD ANALÍTICO ============================= */
@@ -3025,8 +3036,8 @@ function isMotoAccident(r){
   const occupationText = normalizeSearchText(r.ocupacao);
   return MOTO_CID_RE.test(cidText) || MOTO_OCCUPATION_TERMS.some(term=>occupationText.includes(term));
 }
-function distinctValues(field){
-  return [...new Set(records.map(r=>r[field]).filter(v=>v!==undefined && v!==null && v!==''))].sort((a,b)=> String(a).localeCompare(String(b),'pt-BR'));
+function distinctValues(field, source=records){
+  return [...new Set(source.map(r=>r[field]).filter(v=>v!==undefined && v!==null && v!==''))].sort((a,b)=> String(a).localeCompare(String(b),'pt-BR'));
 }
 
 const REQUIRED_FIELD_LABELS = {
@@ -3089,36 +3100,36 @@ function normalizeUnidadeSaude(value){
   return raw;
 }
 
-function distinctNormalizedUnits(){
-  return [...new Set(records.map(r=>normalizeUnidadeSaude(r.unidadeSaude)))].sort((a,b)=>String(a).localeCompare(String(b),'pt-BR'));
+function distinctNormalizedUnits(source=records){
+  return [...new Set(source.map(r=>normalizeUnidadeSaude(r.unidadeSaude)))].sort((a,b)=>String(a).localeCompare(String(b),'pt-BR'));
 }
 function limparFiltrosDash(){
   Object.keys(dashFilters).forEach(k=> dashFilters[k]='');
   render();
 }
-function applyDashFilters(list){
+function applyDashFilters(list, filterState=dashFilters){
   return list.filter(r=>{
     const d = r.dataNotificacao || '';
     const y = d ? d.slice(0,4) : '';
     const m = d ? d.slice(5,7) : '';
-    if(dashFilters.ano && y !== dashFilters.ano) return false;
-    if(dashFilters.mes && m !== dashFilters.mes) return false;
-    if(dashFilters.periodoIni && (!d || d < dashFilters.periodoIni)) return false;
-    if(dashFilters.periodoFim && (!d || d > dashFilters.periodoFim)) return false;
-    if(dashFilters.agravo && r.agravoType !== dashFilters.agravo) return false;
-    if(dashFilters.unidade && normalizeUnidadeSaude(r.unidadeSaude) !== dashFilters.unidade) return false;
-    if(dashFilters.municipio && r.municipioNotificacao !== dashFilters.municipio) return false;
-    if(dashFilters.bairro && r.resBairro !== dashFilters.bairro) return false;
-    if(dashFilters.ocupacao && !(r.ocupacao||'').toLowerCase().includes(dashFilters.ocupacao.toLowerCase())) return false;
-    if(dashFilters.sexo && r.sexo !== dashFilters.sexo) return false;
-    if(dashFilters.racaCor && r.racaCor !== dashFilters.racaCor) return false;
-    if(dashFilters.escolaridade && r.escolaridade !== dashFilters.escolaridade) return false;
-    if(dashFilters.tipoAcidente && r.tipoAcidente !== dashFilters.tipoAcidente) return false;
-    if(dashFilters.status && r.status !== dashFilters.status) return false;
-    if(dashFilters.obito){
+    if(filterState.ano && y !== filterState.ano) return false;
+    if(filterState.mes && m !== filterState.mes) return false;
+    if(filterState.periodoIni && (!d || d < filterState.periodoIni)) return false;
+    if(filterState.periodoFim && (!d || d > filterState.periodoFim)) return false;
+    if(filterState.agravo && r.agravoType !== filterState.agravo) return false;
+    if(filterState.unidade && normalizeUnidadeSaude(r.unidadeSaude) !== filterState.unidade) return false;
+    if(filterState.municipio && r.municipioNotificacao !== filterState.municipio) return false;
+    if(filterState.bairro && r.resBairro !== filterState.bairro) return false;
+    if(filterState.ocupacao && !(r.ocupacao||'').toLowerCase().includes(filterState.ocupacao.toLowerCase())) return false;
+    if(filterState.sexo && r.sexo !== filterState.sexo) return false;
+    if(filterState.racaCor && r.racaCor !== filterState.racaCor) return false;
+    if(filterState.escolaridade && r.escolaridade !== filterState.escolaridade) return false;
+    if(filterState.tipoAcidente && r.tipoAcidente !== filterState.tipoAcidente) return false;
+    if(filterState.status && r.status !== filterState.status) return false;
+    if(filterState.obito){
       const ob = isObito(r);
-      if(dashFilters.obito==='sim' && !ob) return false;
-      if(dashFilters.obito==='nao' && ob) return false;
+      if(filterState.obito==='sim' && !ob) return false;
+      if(filterState.obito==='nao' && ob) return false;
     }
     return true;
   });
@@ -3159,8 +3170,67 @@ function renderAnalyticsSelection(list, filter){
   </div>`;
 }
 
-function renderAnalytics(){
-  const filtered = applyDashFilters(records);
+function yearFromRecord(r){
+  if(r && r.anoReferencia) return String(r.anoReferencia);
+  const d = getEventDate(r) || '';
+  return d.slice(0,4);
+}
+function recordsForYear(year){
+  return year ? records.filter(r=>yearFromRecord(r)===String(year)) : records;
+}
+function annualStats(year){
+  const list = recordsForYear(year);
+  const byType = {};
+  Object.keys(AGRAVOS).forEach(k=>byType[k]=list.filter(r=>r.agravoType===k).length);
+  const sexo = {M:list.filter(r=>r.sexo==='M').length,F:list.filter(r=>r.sexo==='F').length};
+  return {year:String(year), list, total:list.length, byType, moto:list.filter(isMotoAccident).length, masculino:sexo.M, feminino:sexo.F};
+}
+function comparisonDelta(current, previous){
+  if(previous===null || previous===undefined) return '<span class="comparison-muted">Sem base</span>';
+  const diff = current - previous;
+  if(diff===0) return '<span class="delta flat">0 (0%)</span>';
+  const sign = diff>0 ? '+' : '';
+  const rate = previous ? `${sign}${Math.round((diff/previous)*1000)/10}%` : 'novo';
+  return `<span class="delta ${diff>0?'up':'down'}">${sign}${diff} (${rate})</span>`;
+}
+function renderAnnualEmpty(year){
+  return `<div class="panel annual-empty-state">
+    <div class="annual-empty-icon">${year}</div>
+    <h2>Dashboard ${year}</h2>
+    <p>A planilha de ${year} ainda não foi carregada no VISAT. Quando você enviar os arquivos, os registros serão importados e este dashboard passará a mostrar os indicadores exclusivos do ano.</p>
+    <button class="btn btn-ghost" onclick="goTo('comparison')">Ver Comparativo anual</button>
+  </div>`;
+}
+function renderAnnualComparison(){
+  const stats2026 = annualStats('2026');
+  const stats2025 = annualStats('2025');
+  const stats2024 = annualStats('2024');
+  const comparisonRows = [
+    ['Total de ocorrências', stats2025.total, stats2026.total, stats2024.total],
+    [AGRAVOS.grave.label, stats2025.byType.grave, stats2026.byType.grave, stats2024.byType.grave],
+    [AGRAVOS.biologico.label, stats2025.byType.biologico, stats2026.byType.biologico, stats2024.byType.biologico],
+    [AGRAVOS.mental.label, stats2025.byType.mental, stats2026.byType.mental, stats2024.byType.mental],
+    [AGRAVOS.lerdort.label, stats2025.byType.lerdort, stats2026.byType.lerdort, stats2024.byType.lerdort],
+    ['Acidentes envolvendo moto', stats2025.moto, stats2026.moto, stats2024.moto],
+    ['Gênero masculino', stats2025.masculino, stats2026.masculino, stats2024.masculino],
+    ['Gênero feminino', stats2025.feminino, stats2026.feminino, stats2024.feminino]
+  ];
+  const max = Math.max(1, ...comparisonRows.flatMap(row=>[row[1],row[2],row[3]]));
+  return `<div class="annual-comparison-page">
+    <div class="panel comparison-intro"><h2>Comparativo anual</h2><p>Compare os principais indicadores entre os dashboards independentes. A variação apresentada é de 2026 em relação a 2025; 2024 ficará disponível assim que a planilha for importada.</p></div>
+    <div class="charts-grid cols-4 comparison-kpis">
+      ${[['2025',stats2025,'#2E6FB0'],['2026',stats2026,'#1B8A72'],['2024',stats2024,'#B8791A']].map(([year,s,color])=>`<div class="stat-card" style="border-left-color:${color}"><div class="n" style="color:${color}">${s.total}</div><div class="l">Total de ocorrências — ${year}</div>${year==='2024'&&!s.total?'<div class="comparison-muted">Aguardando planilha</div>':''}</div>`).join('')}
+      <div class="stat-card primary"><div class="n">${stats2026.total-stats2025.total>0?'+':''}${stats2026.total-stats2025.total}</div><div class="l">Variação absoluta 2026 × 2025</div><div class="pct">${stats2025.total?`${Math.round((stats2026.total-stats2025.total)/stats2025.total*1000)/10}%`:'Sem base'}</div></div>
+    </div>
+    <div class="chart-panel comparison-chart"><h3>Indicadores por ano</h3>${comparisonRows.map(row=>`<div class="comparison-row"><div class="comparison-label">${esc(row[0])}</div><div class="comparison-bars"><div class="comparison-bar-item"><span>2025</span><div class="comparison-track"><div class="comparison-fill year2025" style="width:${row[1]/max*100}%"></div></div><b>${row[1]}</b></div><div class="comparison-bar-item"><span>2026</span><div class="comparison-track"><div class="comparison-fill year2026" style="width:${row[2]/max*100}%"></div></div><b>${row[2]}</b></div><div class="comparison-bar-item"><span>2024</span><div class="comparison-track"><div class="comparison-fill year2024" style="width:${row[3]/max*100}%"></div></div><b>${row[3]||'—'}</b></div></div><div class="comparison-delta">${comparisonDelta(row[2],row[1])}</div></div>`).join('')}</div>
+    <div class="panel comparison-table-panel"><h2>Resumo numérico e variação</h2><table><thead><tr><th>Indicador</th><th>2025</th><th>2026</th><th>2024</th><th>Variação 2026 × 2025</th></tr></thead><tbody>${comparisonRows.map(row=>`<tr><td>${esc(row[0])}</td><td>${row[1]}</td><td>${row[2]}</td><td>${row[3]||'—'}</td><td>${comparisonDelta(row[2],row[1])}</td></tr>`).join('')}</tbody></table></div>
+  </div>`;
+}
+function renderAnalytics(forcedYear=''){
+  const sourceRecords = recordsForYear(forcedYear);
+  if(forcedYear && !sourceRecords.length) return renderAnnualEmpty(forcedYear);
+  const scopedFilters = forcedYear ? {...dashFilters, ano:String(forcedYear)} : dashFilters;
+  const filtered = applyDashFilters(sourceRecords, scopedFilters);
   const total = filtered.length;
   const byType = {};
   Object.keys(AGRAVOS).forEach(k=> byType[k] = filtered.filter(r=>r.agravoType===k).length);
@@ -3177,15 +3247,16 @@ function renderAnalytics(){
             ? filtered.filter(r=>r.agravoType===selection.kind)
             : null;
   const motoCount = filtered.filter(isMotoAccident).length;
-  const unidades = distinctNormalizedUnits();
-  const municipios = distinctValues('municipioNotificacao');
-  const bairros = distinctValues('resBairro');
-  const anos = [...new Set(records.map(r=>{ const d=r.dataNotificacao || ''; return d? d.slice(0,4):''; }).filter(Boolean))].sort().reverse();
+  const unidades = distinctNormalizedUnits(sourceRecords);
+  const municipios = distinctValues('municipioNotificacao', sourceRecords);
+  const bairros = distinctValues('resBairro', sourceRecords);
+  const anos = [...new Set(sourceRecords.map(yearFromRecord).filter(Boolean))].sort().reverse();
+  const selectedYear = forcedYear || dashFilters.ano;
 
   return `
   <div class="filter-bar">
     <div class="fb-grid">
-      <div><label>Ano</label><select id="fAno"><option value="">Todos</option>${anos.map(a=>`<option value="${a}" ${dashFilters.ano===a?'selected':''}>${a}</option>`).join('')}</select></div>
+      <div><label>Ano</label><select id="fAno" ${forcedYear?'disabled':''}><option value="">Todos</option>${anos.map(a=>`<option value="${a}" ${selectedYear===a?'selected':''}>${a}</option>`).join('')}</select></div>
       <div><label>Período inicial</label><input type="date" id="fPerIni" value="${dashFilters.periodoIni}"></div>
       <div><label>Período final</label><input type="date" id="fPerFim" value="${dashFilters.periodoFim}"></div>
       <div><label>Mês</label><select id="fMes"><option value="">Todos</option>${MESES.map((m,i)=>`<option value="${String(i+1).padStart(2,'0')}" ${dashFilters.mes===String(i+1).padStart(2,'0')?'selected':''}>${m}</option>`).join('')}</select></div>
@@ -3649,7 +3720,7 @@ function renderDashboard(){
   const nRed = withAlerts.filter(x=>x.level==='red').length;
   const nAmber = withAlerts.filter(x=>x.level==='amber').length;
   const nGreen = withAlerts.filter(x=>x.level==='green').length;
-  const nCatPend = records.filter(r=>!isImported2026Record(r) && r.agravoType==='grave' && r.foiEmitidaCAT==='2').length;
+  const nCatPend = records.filter(r=>!isImportedRecord(r) && r.agravoType==='grave' && r.foiEmitidaCAT==='2').length;
 
   if(!records.length){
     return `<div class="panel"><div class="empty-state">
