@@ -3172,6 +3172,9 @@ function renderAnalyticsSelection(list, filter){
 
 function yearFromRecord(r){
   if(r && r.anoReferencia) return String(r.anoReferencia);
+  const sourceId = String(r?.id || '');
+  const sourceYear = sourceId.match(/^excel(20\d{2})-/i);
+  if(sourceYear) return sourceYear[1];
   const d = getEventDate(r) || '';
   return d.slice(0,4);
 }
