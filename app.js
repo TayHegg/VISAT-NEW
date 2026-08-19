@@ -3646,7 +3646,7 @@ function renderDashboard(){
   const nRed = withAlerts.filter(x=>x.level==='red').length;
   const nAmber = withAlerts.filter(x=>x.level==='amber').length;
   const nGreen = withAlerts.filter(x=>x.level==='green').length;
-  const nCatPend = records.filter(r=>r.agravoType==='grave' && r.foiEmitidaCAT==='2').length;
+  const nCatPend = records.filter(r=>!isImported2026Record(r) && r.agravoType==='grave' && r.foiEmitidaCAT==='2').length;
 
   if(!records.length){
     return `<div class="panel"><div class="empty-state">
