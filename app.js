@@ -2656,7 +2656,7 @@ let editingId = null;
 let formPage = 1;
 let formData = {};
 let pdfAttachmentState = {file:null, attachment:null, loading:false, error:''};
-let tableState = { search:'', sortKey:'patientName', sortDir:1, filterAgravo:'', filterStatus:'', filterSituacao:'', page:1, pageSize:10 };
+let tableState = { search:'', sortKey:'fichaNumero', sortDir:1, filterAgravo:'', filterStatus:'', filterSituacao:'', page:1, pageSize:10 };
 let dashFilters = { ano:'', periodoIni:'', periodoFim:'', mes:'', agravo:'', unidade:'', municipio:'', bairro:'', ocupacao:'', sexo:'', racaCor:'', escolaridade:'', tipoAcidente:'', status:'', obito:'' };
 let bmSelectedRegion = null;
 let pendingDeleteId = null;
@@ -3718,6 +3718,15 @@ function getFilteredRecords(){
   if(tableState.filterStatus) list = list.filter(r=> worstLevel(computeAlerts(r)) === tableState.filterStatus);
   if(tableState.filterSituacao) list = list.filter(r=> r.status === tableState.filterSituacao);
   list.sort((a,b)=>{
+    if(tableState.sortKey === 'fichaNumero'){
+      const va = String(a.fichaNumero ?? '').trim();
+      const vb = String(b.fichaNumero ?? '').trim();
+      const aNum = /^\d+$/.test(va);
+      const bNum = /^\d+$/.test(vb);
+      if(aNum && bNum) return (Number(va) - Number(vb)) * tableState.sortDir;
+      if(aNum !== bNum) return aNum ? -1 : 1;
+      return va.localeCompare(vb, 'pt-BR') || String(a.patientName||'').localeCompare(String(b.patientName||''), 'pt-BR');
+    }
     let va = a[tableState.sortKey]||''; let vb = b[tableState.sortKey]||'';
     return (va > vb ? 1 : va < vb ? -1 : 0) * tableState.sortDir;
   });
