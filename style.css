@@ -131,6 +131,8 @@ tr:hover td{background:var(--surface-2);}
   .sidebar{position:fixed;left:-236px;top:0;bottom:0;z-index:50;transition:left .2s ease;}
   .sidebar.open{left:0;}
   .field.span2,.field.span3{grid-column:span 1;}
+  .cnae-input-row{flex-direction:column;}
+  .cnae-input-row .btn{width:100%;justify-content:center;}
 }
 
 /* Autenticação */
@@ -337,6 +339,9 @@ tr:hover td{background:var(--surface-2);}
 
 
 /* Ocupação, códigos oficiais e seleção da Classe CNAE */
+.cnae-input-row{display:flex;align-items:stretch;gap:8px;}
+.cnae-input-row input{min-width:0;flex:1;}
+.cnae-input-row .btn{white-space:nowrap;}
 .cnae-field input[readonly] {
   background: #f5f8fa;
   color: var(--text, #243746);

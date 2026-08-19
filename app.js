@@ -4021,7 +4021,7 @@ const EXPORT_COMMON_COLS = [
   ['Tempo de Trabalho na Ocupação', r=>r.tempoTrabalhoOcupacao||''],
   ['CNPJ/CPF (Empresa)', r=>r.cnpjCpf||''],
   ['Nome da Empresa/Empregador', r=>r.nomeEmpresa||''],
-  ['Classe CNAE (CONCLA)', r=>r.cnae||''],
+  ['Classe CNAE', r=>r.cnae||''],
   ['UF (Empresa)', r=>r.empUf||''],
   ['Município (Empresa)', r=>r.empMunicipio||''],
   ['Distrito (Empresa)', r=>r.empDistrito||''],
@@ -4217,9 +4217,12 @@ function autocompleteField(opts){
 function cnaeClassField(){
   const val = formData.cnae ?? '';
   return `<div class="field span2 cnae-field">
-    <label>Classe CNAE (CONCLA)</label>
-    <input type="text" data-k="cnae" value="${esc(val)}" readonly placeholder="Será consultada pelo CONCLA após selecionar a ocupação">
-    <span class="hint" id="cnaeLookupStatus">${val ? 'Classe CNAE armazenada neste registro.' : 'Selecione uma ocupação para consultar a Classe CNAE oficial no CONCLA/IBGE.'}</span>
+    <label>Classe CNAE</label>
+    <div class="cnae-input-row">
+      <input type="text" data-k="cnae" value="${esc(val)}" maxlength="12" placeholder="Ex.: 43.99-1">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="openGoogleCnaeSearch()" title="Pesquisar a classe CNAE no Google">Pesquisar no Google</button>
+    </div>
+    <span class="hint" id="cnaeLookupStatus">${val ? 'Classe CNAE armazenada neste registro. Confira o código na pesquisa realizada.' : 'Selecione a ocupação e pesquise no Google. Depois digite neste campo a classe CNAE encontrada.'}</span>
     <div id="cnaeLookupList" class="cnae-lookup-list"></div>
   </div>`;
 }
@@ -4728,7 +4731,7 @@ function syncFormFromDOM(){
 }
 
 let cnaeLookupToken = 0;
-const CONCLA_SEARCH_URL = 'https://concla.ibge.gov.br/busca-online-cnae.html';
+const GOOGLE_SEARCH_URL = 'https://www.google.com/search';
 
 function setFormFieldValue(key, value){
   formData[key] = value ?? '';
@@ -4741,15 +4744,30 @@ function clearOccupationDerivedFields(){
   setFormFieldValue('cnae', '');
   const status = document.getElementById('cnaeLookupStatus');
   const choices = document.getElementById('cnaeLookupList');
-  if(status) status.textContent = 'Selecione uma ocupação para consultar a Classe CNAE oficial no CONCLA/IBGE.';
+  if(status) status.textContent = 'Selecione uma ocupação e pesquise a classe CNAE no Google.';
   if(choices) choices.innerHTML = '';
 }
-function conclaSearchUrl(query){
-  const params = new URLSearchParams({
-    option:'com_cnae', view:'atividades', Itemid:'6160', tipo:'cnae', chave:query,
-    versao_classesubclasse:'10.1.0', versao_classe:'7.0.0', versao_subclasse:'10.1.0'
-  });
-  return `${CONCLA_SEARCH_URL}?${params.toString()}`;
+function googleCnaeSearchUrl(occupation){
+  const raw = String(occupation || formData.ocupacao || '').trim();
+  const cbo = String(formData.cbo || '').trim();
+  const query = ['CNAE classe', raw, cbo ? `CBO ${cbo}` : ''].filter(Boolean).join(' ');
+  const params = new URLSearchParams({q: query, hl:'pt-BR', num:'10'});
+  return `${GOOGLE_SEARCH_URL}?${params.toString()}`;
+}
+function openGoogleCnaeSearch(occupation=formData.ocupacao){
+  const status = document.getElementById('cnaeLookupStatus');
+  const raw = String(occupation || '').trim();
+  if(!raw){
+    if(status) status.textContent = 'Selecione uma ocupação antes de pesquisar o CNAE no Google.';
+    return;
+  }
+  const url = googleCnaeSearchUrl(raw);
+  const popup = window.open(url, '_blank', 'noopener,noreferrer');
+  if(!popup){
+    if(status) status.textContent = 'O navegador bloqueou a nova aba. Permita pop-ups para o VISAT e tente novamente.';
+    return;
+  }
+  if(status) status.textContent = 'Pesquisa aberta no Google. Confira a classe CNAE da atividade e digite o código neste campo.';
 }
 function classeFromSubclasse(code){
   const m = String(code||'').match(/^(\d{2})(\d{2}-\d)\/\d{2}$/);
@@ -4785,33 +4803,13 @@ function renderCnaeChoices(options){
   list.innerHTML = options.map((option, index)=>`<button type="button" class="cnae-choice" data-cnae-index="${index}"><strong>${esc(option.classe)}</strong><span>${esc(option.description || `Resultado ${index+1}`)}</span><small>Subclasse encontrada: ${esc(option.subclasse)}</small></button>`).join('');
   list.querySelectorAll('.cnae-choice').forEach(button=>button.addEventListener('click', ()=>selectCnaeClass(options[Number(button.dataset.cnaeIndex)])));
 }
-async function lookupCnaeForOccupation(occupation){
+function lookupCnaeForOccupation(occupation){
   const status = document.getElementById('cnaeLookupStatus');
   const choices = document.getElementById('cnaeLookupList');
   const token = ++cnaeLookupToken;
-  if(status) status.textContent = 'Consultando a Classe CNAE oficial no CONCLA/IBGE...';
-  if(choices) choices.innerHTML = '';
-  try{
-    const response = await fetch(conclaSearchUrl(occupation), {headers:{Accept:'text/html'}, cache:'no-store'});
-    if(!response.ok) throw new Error(`HTTP ${response.status}`);
-    const html = await response.text();
-    if(token !== cnaeLookupToken) return;
-    const options = parseConclaClasses(html);
-    if(!options.length){
-      if(status) status.textContent = 'Nenhuma Classe CNAE foi encontrada no CONCLA para esta ocupação. O campo pode ser revisado manualmente.';
-      return;
-    }
-    if(options.length === 1){
-      selectCnaeClass(options[0]);
-    } else {
-      if(status) status.textContent = 'O CONCLA encontrou mais de uma Classe CNAE. Selecione a atividade correspondente:';
-      renderCnaeChoices(options);
-    }
-  }catch(error){
-    if(token !== cnaeLookupToken) return;
-    if(status) status.textContent = 'Não foi possível consultar o CONCLA agora. Verifique sua conexão e tente selecionar a ocupação novamente.';
-    console.warn('Falha na consulta ao CONCLA', error);
-  }
+  if(!occupation || token !== cnaeLookupToken) return;
+  if(status) status.textContent = 'O CNAE será consultado no Google para a ocupação selecionada.';
+  if(choices) choices.innerHTML = `<button type="button" class="btn btn-ghost btn-sm" onclick="openGoogleCnaeSearch()">Pesquisar esta ocupação no Google</button>`;
 }
 function bindFormEvents(){
   const form = document.getElementById('mainForm');
@@ -4829,6 +4827,11 @@ function bindFormEvents(){
       formData.ocupacao = e.target.value;
       const selected = CBO_DB.some(item=>normalizeSearchText(item.desc) === normalizeSearchText(e.target.value));
       if(!selected) clearOccupationDerivedFields();
+    }
+    if(e.target.dataset.k === 'cnae'){
+      formData.cnae = e.target.value.trim();
+      const status = document.getElementById('cnaeLookupStatus');
+      if(status && formData.cnae) status.textContent = 'CNAE informado. Confira se corresponde à atividade encontrada no Google.';
     }
     if(e.target.dataset.ac === 'cid'){
       updateCidDescription(e.target);
