@@ -3110,9 +3110,8 @@ function limparFiltrosDash(){
 function applyDashFilters(list, filterState=dashFilters){
   return list.filter(r=>{
     const d = r.dataNotificacao || '';
-    const y = d ? d.slice(0,4) : '';
     const m = d ? d.slice(5,7) : '';
-    if(filterState.ano && y !== filterState.ano) return false;
+    if(filterState.ano && yearFromRecord(r) !== String(filterState.ano)) return false;
     if(filterState.mes && m !== filterState.mes) return false;
     if(filterState.periodoIni && (!d || d < filterState.periodoIni)) return false;
     if(filterState.periodoFim && (!d || d > filterState.periodoFim)) return false;
