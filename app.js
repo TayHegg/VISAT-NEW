@@ -5016,7 +5016,7 @@ function renderPrint(id){
       ['Data do Acidente', fmtDate(r.dataAcidente)],
       ['Nome do Paciente', r.patientName],['Data de Nascimento', fmtDate(r.dataNascimento)+ (age!=null?` (${age} anos — ${faixaEtaria(age)})`:'')],
       ['Sexo', r.sexo],['Município/UF de Notificação', (r.municipioNotificacao||'')+' / '+(r.ufNotificacao||'')],
-      ['Ocupação', r.ocupacao],['Nº do SINAN', r.numeroSinan],['CBO', r.cbo],['Classe CNAE (CONCLA)', r.cnae],['Empresa', r.nomeEmpresa],['CNPJ/CPF', r.cnpjCpf],
+      ['Ocupação', r.ocupacao],['Nº do SINAN', r.numeroSinan],['CBO', r.cbo],['Classe CNAE', r.cnae],['Empresa', r.nomeEmpresa],['CNPJ/CPF', r.cnpjCpf],
     ])}</table>
     ${r.agravoType==='grave' ? `<h2 style="font-size:14px;margin-top:16px">Acidente de Trabalho Grave</h2><table>${rows([
       ['Tipo de Acidente', r.tipoAcidente==='1'?'Típico':r.tipoAcidente==='2'?'Trajeto':r.tipoAcidente],
