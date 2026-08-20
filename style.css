@@ -599,6 +599,17 @@ tr:hover td{background:var(--surface-2);}
 .controle-linked{display:block;color:var(--text);font-size:12.5px;line-height:1.35;}
 .controle-linked.muted{color:var(--text-muted);font-style:italic;}
 .controle-link-preview{min-height:24px;margin-top:9px;color:var(--text-muted);font-size:12px;}
+.controle-distribuicao-panel{border-left:3px solid #efa92b;}
+.controle-distribuicao-mark{display:inline-flex;align-items:center;padding:5px 9px;border:1px solid #efb64e;border-radius:6px;background:#fff5df;color:#8a5b08;font:700 10px var(--font-mono);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;}
+.controle-distribuicao-form{display:grid;grid-template-columns:minmax(260px,1.6fr) minmax(190px,1fr) minmax(150px,.75fr) auto;gap:12px;align-items:end;margin-top:16px;}
+.controle-distribuicao-form textarea{min-height:60px;resize:vertical;}
+.controle-distribuicao-submit{display:flex;align-items:end;height:100%;}
+.controle-distribuicao-submit .btn{height:38px;white-space:nowrap;}
+.controle-destino-chip{display:inline-flex;align-items:center;margin-top:6px;padding:4px 8px;border:2px solid #efa92b;border-radius:5px;background:#fff1d2;color:#875600;font:700 10px var(--font-body);line-height:1.1;white-space:nowrap;}
+.alert-card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.alert-card-head .controle-destino-chip{margin-top:0;}
+@media (max-width:980px){.controle-distribuicao-form{grid-template-columns:1fr 1fr;}.controle-distribuicao-numeros{grid-column:1 / -1;}.controle-distribuicao-submit{grid-column:1 / -1;}.controle-distribuicao-submit .btn{width:100%;justify-content:center;}}
+@media (max-width:640px){.controle-distribuicao-form{grid-template-columns:1fr;}.controle-distribuicao-numeros,.controle-distribuicao-submit{grid-column:auto;}.controle-distribuicao-mark{align-self:flex-start;}}
 .controle-modal{max-width:620px;}
 .controle-modal form{display:flex;flex-direction:column;gap:0;}
 @media (max-width:700px){.controle-heading{flex-direction:column;}.controle-heading .btn{width:100%;justify-content:center;}.controle-tabs{display:grid;grid-template-columns:1fr 1fr;}.controle-tab{text-align:left;}}

@@ -2780,6 +2780,25 @@ function controleFichaTabMatches(item, tab){
   return true;
 }
 function controleFichaCount(tab){ return controleFichas.filter(item => controleFichaTabMatches(item, tab)).length; }
+function findControleFichaByNumero(numero){
+  const key = normalizeControleFicha(numero);
+  if(!key) return null;
+  return controleFichas.find(item => normalizeControleFicha(item.numeroFicha) === key) || null;
+}
+function controleFichaDistributionLabel(item){
+  if(!item) return '';
+  if(item.distribuidoPara) return String(item.distribuidoPara);
+  if(item.status === 'com_enfermeiro' && item.enfermeiroResponsavel) return item.enfermeiroResponsavel;
+  if(item.status === 'devolvida') return 'Epidemiologia';
+  if(item.status === 'departamento_visat') return 'Departamento VISAT';
+  return '';
+}
+function controleFichaDistributionChip(item){
+  const label = controleFichaDistributionLabel(item);
+  if(!label) return '';
+  const prefix = label === 'Departamento VISAT' ? 'Aguardando distribuição' : 'Distribuído para';
+  return `<span class="controle-destino-chip">${prefix} ${esc(label)}</span>`;
+}
 function controleFichaLinkedSummary(item){
   const linked = findLinkedRecord(item.numeroFicha);
   if(!linked) return '<span class="controle-linked muted">Sem ficha correspondente cadastrada</span>';
@@ -2826,6 +2845,18 @@ function renderControleFichas(){
         ${tabs.map(([key,label])=>`<button class="controle-tab ${currentTab===key?'active':''}" onclick="setControleTab('${key}')">${esc(label)} <span>${controleFichaCount(key)}</span></button>`).join('')}
       </div>
     </div>
+    <div class="panel controle-distribuicao-panel">
+      <div class="controle-heading">
+        <div><h2>Distribuição de Fichas</h2><div class="hint">Informe vários números separados por vírgula e escolha para onde as fichas foram distribuídas.</div></div>
+        <span class="controle-distribuicao-mark">Distribuição em lote</span>
+      </div>
+      <form class="controle-distribuicao-form" id="controleDistribuicaoForm" onsubmit="submitControleDistribuicao(event)">
+        <div class="field controle-distribuicao-numeros"><label for="controleDistribuicaoNumeros">Nº das fichas <span class="req">*</span></label><textarea id="controleDistribuicaoNumeros" name="numeros" rows="2" placeholder="Ex.: 358, 368, 475, 125, 65" required></textarea><div class="hint">Você pode separar por vírgula, ponto e vírgula ou quebra de linha.</div></div>
+        <div class="field"><label for="controleDistribuicaoDestino">Distribuir para <span class="req">*</span></label><select id="controleDistribuicaoDestino" name="destino" required><option value="">Selecione o destino</option><option value="Julio Cesar">Julio Cesar</option><option value="Luciane Manhães">Luciane Manhães</option><option value="Epidemiologia">Epidemiologia</option></select></div>
+        <div class="field"><label for="controleDistribuicaoData">Data da distribuição <span class="req">*</span></label><input id="controleDistribuicaoData" name="dataDistribuicao" type="date" value="${todayISO()}" required></div>
+        <div class="controle-distribuicao-submit"><button class="btn btn-primary" type="submit">Distribuir fichas</button></div>
+      </form>
+    </div>
     <div class="panel">
       <div class="toolbar"><div><h2 style="margin-bottom:3px">${esc(tabs.find(([key])=>key===currentTab)?.[1] || 'Fichas')}</h2><div class="hint">${list.length} ficha(s) nesta visão.</div></div></div>
       ${list.length ? `<div class="table-scroll"><table class="controle-table"><thead><tr><th>Nº da ficha</th><th>Dados básicos</th><th>Entrada no status atual</th><th>Dias no status</th><th>Responsável</th><th>Ações</th></tr></thead><tbody>${list.map(item=>renderControleFichaRow(item)).join('')}</tbody></table></div>` : `<div class="empty-state"><div style="font-size:38px;color:var(--border);margin-bottom:8px">—</div><b>Nenhuma ficha nesta aba</b><div style="margin-top:5px">Use “Nova Entrada” para registrar uma ficha recebida da Epidemiologia.</div></div>`}
@@ -2840,13 +2871,74 @@ function renderControleFichaRow(item){
       ? `<button class="btn btn-primary btn-sm" onclick="openControleModal('status','${esc(item.id)}')">Devolver</button>`
       : `<button class="btn btn-ghost btn-sm" onclick="openControleModal('status','${esc(item.id)}')">Reabrir</button>`;
   return `<tr>
-    <td><b style="font-family:var(--font-mono)">${esc(item.numeroFicha || 'S/N')}</b><div class="controle-status-label">${esc(statusLabel)}</div></td>
+    <td><b style="font-family:var(--font-mono)">${esc(item.numeroFicha || 'S/N')}</b><div class="controle-status-label">${esc(statusLabel)}</div>${controleFichaDistributionChip(item)}</td>
     <td>${controleFichaLinkedSummary(item)}</td>
     <td>${fmtDate(controleFichaStatusDate(item))}</td>
     <td><span class="badge ${item.status==='devolvida'?'green':'amber'}">${controleFichaDays(item)} dia(s)</span></td>
     <td>${esc(nurse)}</td>
     <td><div class="row-actions">${primaryAction}<button class="btn btn-ghost btn-sm" onclick="openControleModal('edit','${esc(item.id)}')">Corrigir</button></div></td>
   </tr>`;
+}
+async function submitControleDistribuicao(event){
+  event.preventDefault();
+  const form = event.currentTarget;
+  const rawNumbers = String(form.elements.numeros?.value || '');
+  const numbers = [...new Set(rawNumbers.split(/[,;\n]+/).map(value => value.trim()).filter(Boolean))];
+  const destino = String(form.elements.destino?.value || '');
+  const dataDistribuicao = String(form.elements.dataDistribuicao?.value || todayISO());
+  if(!numbers.length){ showToast('Informe pelo menos um número de ficha.'); return; }
+  if(!['Julio Cesar','Luciane Manhães','Epidemiologia'].includes(destino)){ showToast('Selecione Julio Cesar, Luciane Manhães ou Epidemiologia.'); return; }
+  const targetStatus = destino === 'Epidemiologia' ? 'devolvida' : 'com_enfermeiro';
+  const saved = [];
+  const failed = [];
+  for(const numero of numbers){
+    const current = findControleFichaByNumero(numero);
+    const isNew = !current;
+    const now = new Date().toISOString();
+    const next = isNew ? {
+      id:`cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`,
+      controleFicha:true,
+      numeroFicha:numero,
+      status:'departamento_visat',
+      enfermeiroResponsavel:'',
+      dataRecebimentoEpidemio:dataDistribuicao,
+      dataAtribuicaoEnfermeiro:'',
+      dataDevolucaoEpidemio:'',
+      dataStatusAtual:dataDistribuicao,
+      observacoes:'',
+      historico:[],
+      createdAt:now,
+    } : {...current};
+    next.status = targetStatus;
+    next.enfermeiroResponsavel = targetStatus === 'com_enfermeiro' ? destino : '';
+    next.dataStatusAtual = dataDistribuicao;
+    next.dataDistribuicao = dataDistribuicao;
+    next.distribuidoPara = destino;
+    if(targetStatus === 'com_enfermeiro') next.dataAtribuicaoEnfermeiro = dataDistribuicao;
+    if(targetStatus === 'devolvida') next.dataDevolucaoEpidemio = dataDistribuicao;
+    next.historico = [...(current?.historico || []), {
+      tipo:'distribuicao_lote',
+      statusAnterior:current?.status || null,
+      statusNovo:targetStatus,
+      enfermeiroAnterior:current?.enfermeiroResponsavel || null,
+      enfermeiroNovo:targetStatus === 'com_enfermeiro' ? destino : null,
+      distribuidoPara:destino,
+      dataDistribuicao,
+      dataMudanca:now,
+      observacoes:'Distribuição em lote',
+    }];
+    if(await upsertControleFichaRemote(next)){
+      if(isNew) controleFichas.push(next);
+      else controleFichas = controleFichas.map(item => item.id === current.id ? next : item);
+      saved.push(numero);
+    } else failed.push(numero);
+  }
+  render();
+  if(failed.length){
+    showToast(`${saved.length} ficha(s) distribuída(s); falha ao salvar: ${failed.join(', ')}.`);
+  } else {
+    showToast(`${saved.length} ficha(s) distribuída(s) para ${destino}.`);
+  }
 }
 function setControleTab(tab){ controleTab = tab; render(); }
 function closeControleModal(){ document.getElementById('controleModal')?.remove(); }
@@ -3967,11 +4059,12 @@ function renderDashboard(){
   const alertCards = withAlerts.filter(x=>x.level!=='green')
     .sort((a,b)=> (a.level==='red'?0:1)-(b.level==='red'?0:1)).map(x=>{
       const missing = getMissingDataLabels(x.r);
+      const distribution = controleFichaDistributionChip(findControleFichaByNumero(x.r.fichaNumero));
       return `<div class="alert-card ${x.level}" onclick="goTo('form','${x.r.id}')">
         <div class="alert-card-main">
           <span class="dot ${x.level}"></span>
           <div class="alert-card-content">
-            <div class="alert-card-head"><span class="alert-card-ficha">Nº da Ficha: ${esc(fichaLabel(x.r))}</span><span class="alert-card-type">${esc(AGRAVOS[x.r.agravoType]?.label||'')}</span></div>
+            <div class="alert-card-head"><span class="alert-card-ficha">Nº da Ficha: ${esc(fichaLabel(x.r))} ${distribution}</span><span class="alert-card-type">${esc(AGRAVOS[x.r.agravoType]?.label||'')}</span></div>
             <div class="alert-card-name">${esc(x.r.patientName||'(sem nome)')}</div>
             <div class="alert-card-sub">Dados pendentes nesta ficha:</div>
             <ul class="alert-missing">${missing.length ? missing.map(item=>`<li>${esc(item)}</li>`).join('') : '<li>Verificar pendências do registro</li>'}</ul>
