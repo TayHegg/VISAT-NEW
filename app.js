@@ -4235,7 +4235,7 @@ function cnaeClassField(){
       <input type="text" data-k="cnae" value="${esc(val)}" maxlength="12" placeholder="Ex.: 43.99-1">
       <button type="button" class="btn btn-ghost btn-sm" onclick="openGoogleCnaeSearch()" title="Pesquisar a classe CNAE no Google">Pesquisar no Google</button>
     </div>
-    <span class="hint" id="cnaeLookupStatus">${val ? 'Classe CNAE armazenada neste registro. Confira o código na pesquisa realizada.' : 'Selecione a ocupação e pesquise no Google. Depois digite neste campo a classe CNAE encontrada.'}</span>
+    <span class="hint" id="cnaeLookupStatus">${val ? 'Classe CNAE armazenada neste registro. Confira o código na pesquisa realizada.' : 'Será preenchido quando houver correspondência. Se ficar vazio, pesquise no Google e digite manualmente a classe CNAE.'}</span>
     <div id="cnaeLookupList" class="cnae-lookup-list"></div>
   </div>`;
 }
@@ -5209,8 +5209,8 @@ function renderPage1(){
       <div class="sec-title">Antecedentes Epidemiológicos — Ocupação</div>
       <div class="field-grid">
         ${autocompleteField({num:'', label:'Ocupação (Profissão)', key:'ocupacao', db:'cbo', required:true, hint:'Digite a profissão e selecione uma ocupação da base oficial SINAN/CBO'})}
-        ${field({num:'', label:'Nº do SINAN', key:'numeroSinan', readOnly:true, hint:'Preenchido automaticamente a partir da ocupação selecionada'})}
-        ${field({num:'', label:'Nº do CBO', key:'cbo', readOnly:true, hint:'Preenchido automaticamente a partir da ocupação selecionada'})}
+        ${field({num:'', label:'Nº do SINAN', key:'numeroSinan', hint:'Preenchido automaticamente quando houver correspondência. Se ficar vazio, digite manualmente.'})}
+        ${field({num:'', label:'Nº do CBO', key:'cbo', hint:'Preenchido automaticamente quando houver correspondência. Se ficar vazio, digite manualmente.'})}
         ${cnaeClassField()}
         ${field({num:'', label:'Situação no Mercado de Trabalho', key:'situacaoMercado', type:'select', span:'span2', options:[
           ['01','Empregado registrado com carteira assinada'],['02','Empregado não registrado'],['03','Autônomo/conta própria'],
@@ -5601,6 +5601,9 @@ function bindFormEvents(){
       const selected = CBO_DB.some(item=>normalizeSearchText(item.desc) === normalizeSearchText(e.target.value));
       if(!selected) clearOccupationDerivedFields();
     }
+    if(['numeroSinan','cbo'].includes(e.target.dataset.k)){
+      formData[e.target.dataset.k] = e.target.value.trim();
+    }
     if(e.target.dataset.k === 'cnae'){
       formData.cnae = e.target.value.trim();
       const status = document.getElementById('cnaeLookupStatus');
@@ -5622,11 +5625,11 @@ function bindFormEvents(){
       if(!item || item.dataset.value === undefined) return;
       const inputKey = list.id.replace('ac-','');
       const input = document.querySelector(`[data-k="${inputKey}"]`);
-      if(inputKey === 'ocupacao' && item.dataset.sinan){
+      if(inputKey === 'ocupacao'){
         input.value = item.dataset.value;
         formData.ocupacao = item.dataset.value;
-        setFormFieldValue('numeroSinan', item.dataset.sinan);
-        setFormFieldValue('cbo', item.dataset.cbo);
+        setFormFieldValue('numeroSinan', item.dataset.sinan || '');
+        setFormFieldValue('cbo', item.dataset.cbo || '');
         setFormFieldValue('cnae', '');
         const choices = document.getElementById('cnaeLookupList');
         if(choices) choices.innerHTML = '';
