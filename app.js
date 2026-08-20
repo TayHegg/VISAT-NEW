@@ -2884,7 +2884,7 @@ function isEmpty(v){ return v==null || v==='' || (Array.isArray(v) && v.length==
 // encerradas na origem. Eles continuam com os dados originais, mas não devem
 // gerar pendências operacionais no Painel ou na Consulta de Fichas.
 function isImportedRecord(r){
-  return /^excel20(25|26)-/.test(String(r?.id || ''));
+  return /^excel20(24|25|26)-/.test(String(r?.id || ''));
 }
 function isImported2026Record(r){
   return String(r?.id || '').startsWith('excel2026-');
@@ -3219,7 +3219,7 @@ function renderAnnualComparison(){
   ];
   const max = Math.max(1, ...comparisonRows.flatMap(row=>[row[1],row[2],row[3]]));
   return `<div class="annual-comparison-page">
-    <div class="panel comparison-intro"><h2>Comparativo anual</h2><p>Compare os principais indicadores entre os dashboards independentes. A variação apresentada é de 2026 em relação a 2025; 2024 ficará disponível assim que a planilha for importada.</p></div>
+    <div class="panel comparison-intro"><h2>Comparativo anual</h2><p>Compare os principais indicadores entre os dashboards independentes. A variação apresentada é de 2026 em relação a 2025; os valores de 2024 já estão disponíveis na base importada.</p></div>
     <div class="charts-grid cols-4 comparison-kpis">
       ${[['2025',stats2025,'#2E6FB0'],['2026',stats2026,'#1B8A72'],['2024',stats2024,'#B8791A']].map(([year,s,color])=>`<div class="stat-card" style="border-left-color:${color}"><div class="n" style="color:${color}">${s.total}</div><div class="l">Total de ocorrências — ${year}</div>${year==='2024'&&!s.total?'<div class="comparison-muted">Aguardando planilha</div>':''}</div>`).join('')}
       <div class="stat-card primary"><div class="n">${stats2026.total-stats2025.total>0?'+':''}${stats2026.total-stats2025.total}</div><div class="l">Variação absoluta 2026 × 2025</div><div class="pct">${stats2025.total?`${Math.round((stats2026.total-stats2025.total)/stats2025.total*1000)/10}%`:'Sem base'}</div></div>
