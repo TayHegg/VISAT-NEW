@@ -2675,12 +2675,20 @@ try{
 
 async function loadRecords(){
   try{
-    const { data, error } = await supabaseClient
-      .from('records')
-      .select('data')
-      .order('updated_at', { ascending: true });
-    if(error) throw error;
-    records = (data || []).map(row => row.data);
+    const pageSize = 1000;
+    const allRows = [];
+    for(let offset = 0;; offset += pageSize){
+      const { data, error } = await supabaseClient
+        .from('records')
+        .select('data')
+        .order('updated_at', { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if(error) throw error;
+      const page = data || [];
+      allRows.push(...page);
+      if(page.length < pageSize) break;
+    }
+    records = allRows.map(row => row.data);
   }catch(e){
     console.error('Falha ao carregar registros do Supabase', e);
     records = [];
