@@ -2664,6 +2664,9 @@ let pendingDeleteId = null;
 let dashboardCardFilter = '';
 let analyticsCardFilter = null;
 
+let controleFichas = [];
+let controleTab = 'todas';
+
 /* ============================= SUPABASE ============================= */
 const SUPABASE_URL = 'https://rjcjvxxmfvasymcncrge.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_OqhyfChr2RxPl3xfxAPyuQ_sge3PV7j';
@@ -2689,7 +2692,9 @@ async function loadRecords(){
       allRows.push(...page);
       if(page.length < pageSize) break;
     }
-    records = allRows.map(row => row.data);
+    const loaded = allRows.map(row => row.data).filter(Boolean);
+    controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
+    records = loaded.filter(row => !isControleFichaRecord(row));
   }catch(e){
     console.error('Falha ao carregar registros do Supabase', e);
     records = [];
@@ -2721,6 +2726,212 @@ async function deleteRecordRemote(id){
   }
 }
 
+
+
+/* ============================= CONTROLE DE FICHAS ============================= */
+const CONTROLE_FICHA_STATUS = {
+  departamento_visat: {label:'Departamento VISAT'},
+  com_enfermeiro: {label:'Com enfermeiro'},
+  devolvida: {label:'Devolvida à Epidemio'},
+};
+const CONTROLE_FICHA_NURSES = ['Julio Cesar','Luciane Manhães'];
+
+function todayISO(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+function normalizeControleFicha(value){
+  return String(value ?? '').trim().replace(/^#/, '').replace(/\s+/g,' ').toUpperCase();
+}
+function isControleFichaRecord(r){
+  return Boolean(r && (r.controleFicha === true || String(r.id || '').startsWith('cf-')));
+}
+function normalizeControleFichaRecord(r){
+  const item = {...r, controleFicha:true};
+  if(!item.id) item.id = `cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
+  item.historico = Array.isArray(item.historico) ? item.historico : [];
+  return item;
+}
+function controleFichaStorageId(item){ return item.storageId || `cf-${item.id}`; }
+function findLinkedRecord(numero){
+  const key = normalizeControleFicha(numero);
+  if(!key) return null;
+  return records.find(r => normalizeControleFicha(r.fichaNumero) === key) || null;
+}
+function controleFichaStatusDate(item){
+  if(item.status === 'devolvida') return item.dataDevolucaoEpidemio || item.dataStatusAtual || item.dataRecebimentoEpidemio;
+  if(item.status === 'com_enfermeiro') return item.dataAtribuicaoEnfermeiro || item.dataStatusAtual || item.dataRecebimentoEpidemio;
+  return item.dataStatusAtual || item.dataRecebimentoEpidemio;
+}
+function controleFichaDays(item){
+  const date = controleFichaStatusDate(item);
+  if(!date) return '—';
+  const start = new Date(`${date}T00:00:00`);
+  const today = new Date(`${todayISO()}T00:00:00`);
+  return Math.max(0, Math.floor((today - start) / 86400000));
+}
+function controleFichaTabMatches(item, tab){
+  if(tab === 'todas') return true;
+  if(tab === 'departamento_visat') return item.status === 'departamento_visat';
+  if(tab === 'julio_cesar') return item.status === 'com_enfermeiro' && item.enfermeiroResponsavel === 'Julio Cesar';
+  if(tab === 'luciane_manhaes') return item.status === 'com_enfermeiro' && item.enfermeiroResponsavel === 'Luciane Manhães';
+  if(tab === 'devolvida') return item.status === 'devolvida';
+  return true;
+}
+function controleFichaCount(tab){ return controleFichas.filter(item => controleFichaTabMatches(item, tab)).length; }
+function controleFichaLinkedSummary(item){
+  const linked = findLinkedRecord(item.numeroFicha);
+  if(!linked) return '<span class="controle-linked muted">Sem ficha correspondente cadastrada</span>';
+  const accidentDate = linked.dataAcidente || linked.dataAcidenteBio || linked.dataDiagnosticoLD || linked.dataDiagnosticoMental;
+  return `<span class="controle-linked">${esc(linked.patientName || 'Paciente sem nome')} · acidente: ${esc(fmtDate(accidentDate))}</span>`;
+}
+async function upsertControleFichaRemote(item){
+  try{
+    if(!supabaseClient) return false;
+    const payload = {...item, controleFicha:true, storageId:controleFichaStorageId(item), updatedAt:new Date().toISOString()};
+    const {error} = await supabaseClient.from('records').upsert({
+      id: payload.storageId,
+      data: payload,
+      updated_at: payload.updatedAt,
+    }, {onConflict:'id'});
+    if(error) throw error;
+    return true;
+  }catch(error){
+    console.error('Falha ao salvar o controle da ficha no Supabase', error);
+    return false;
+  }
+}
+function renderControleFichas(){
+  const tabs = [
+    ['todas','Todas'],
+    ['departamento_visat','Departamento VISAT'],
+    ['julio_cesar','Julio Cesar'],
+    ['luciane_manhaes','Luciane Manhães'],
+    ['devolvida','Devolvidas à Epidemio'],
+  ];
+  const currentTab = tabs.some(([key])=>key===controleTab) ? controleTab : 'todas';
+  const list = controleFichas
+    .filter(item=>controleFichaTabMatches(item,currentTab))
+    .sort((a,b)=>String(controleFichaStatusDate(b)||'').localeCompare(String(controleFichaStatusDate(a)||'')) || String(a.numeroFicha||'').localeCompare(String(b.numeroFicha||''),'pt-BR'));
+  const statCards = tabs.map(([key,label])=>`<div class="stat-card ${key==='devolvida'?'green':key==='todas'?'primary':'amber'} controle-stat-card" onclick="setControleTab('${key}')"><div class="n">${controleFichaCount(key)}</div><div class="l">${esc(label)}</div></div>`).join('');
+  return `
+    <div class="grid-stats controle-stats">${statCards}</div>
+    <div class="panel controle-panel-intro">
+      <div class="controle-heading">
+        <div><h2>Fluxo das fichas recebidas da Epidemiologia</h2><div class="hint">Acompanhe onde cada ficha está e há quantos dias permanece no status atual.</div></div>
+        <button class="btn btn-primary" onclick="openControleModal('new')"><span style="font-size:18px;line-height:0">+</span> Nova Entrada</button>
+      </div>
+      <div class="controle-tabs" role="tablist">
+        ${tabs.map(([key,label])=>`<button class="controle-tab ${currentTab===key?'active':''}" onclick="setControleTab('${key}')">${esc(label)} <span>${controleFichaCount(key)}</span></button>`).join('')}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="toolbar"><div><h2 style="margin-bottom:3px">${esc(tabs.find(([key])=>key===currentTab)?.[1] || 'Fichas')}</h2><div class="hint">${list.length} ficha(s) nesta visão.</div></div></div>
+      ${list.length ? `<div class="table-scroll"><table class="controle-table"><thead><tr><th>Nº da ficha</th><th>Dados básicos</th><th>Entrada no status atual</th><th>Dias no status</th><th>Responsável</th><th>Ações</th></tr></thead><tbody>${list.map(item=>renderControleFichaRow(item)).join('')}</tbody></table></div>` : `<div class="empty-state"><div style="font-size:38px;color:var(--border);margin-bottom:8px">—</div><b>Nenhuma ficha nesta aba</b><div style="margin-top:5px">Use “Nova Entrada” para registrar uma ficha recebida da Epidemiologia.</div></div>`}
+    </div>`;
+}
+function renderControleFichaRow(item){
+  const statusLabel = CONTROLE_FICHA_STATUS[item.status]?.label || item.status || '—';
+  const nurse = item.enfermeiroResponsavel || '—';
+  const primaryAction = item.status === 'departamento_visat'
+    ? `<button class="btn btn-primary btn-sm" onclick="openControleModal('status','${esc(item.id)}')">Atribuir</button>`
+    : item.status === 'com_enfermeiro'
+      ? `<button class="btn btn-primary btn-sm" onclick="openControleModal('status','${esc(item.id)}')">Devolver</button>`
+      : `<button class="btn btn-ghost btn-sm" onclick="openControleModal('status','${esc(item.id)}')">Reabrir</button>`;
+  return `<tr>
+    <td><b style="font-family:var(--font-mono)">${esc(item.numeroFicha || 'S/N')}</b><div class="controle-status-label">${esc(statusLabel)}</div></td>
+    <td>${controleFichaLinkedSummary(item)}</td>
+    <td>${fmtDate(controleFichaStatusDate(item))}</td>
+    <td><span class="badge ${item.status==='devolvida'?'green':'amber'}">${controleFichaDays(item)} dia(s)</span></td>
+    <td>${esc(nurse)}</td>
+    <td><div class="row-actions">${primaryAction}<button class="btn btn-ghost btn-sm" onclick="openControleModal('edit','${esc(item.id)}')">Corrigir</button></div></td>
+  </tr>`;
+}
+function setControleTab(tab){ controleTab = tab; render(); }
+function closeControleModal(){ document.getElementById('controleModal')?.remove(); }
+function controleModalField(label,name,value,type='text',required=false){
+  return `<div class="field"><label>${esc(label)}${required?' <span class="req">*</span>':''}</label><input name="${name}" type="${type}" value="${esc(value||'')}" ${required?'required':''}></div>`;
+}
+function openControleModal(mode,id=''){
+  const item = id ? controleFichas.find(x=>x.id===id) : null;
+  if((mode !== 'new') && !item) return;
+  const isNew = mode === 'new';
+  const isStatus = mode === 'status';
+  const title = isNew ? 'Nova Entrada' : isStatus ? 'Alterar status da ficha' : 'Corrigir entrada';
+  const dateValue = isNew ? todayISO() : (isStatus ? todayISO() : item.dataRecebimentoEpidemio || todayISO());
+  const statusValue = item?.status || 'departamento_visat';
+  const nurseValue = item?.enfermeiroResponsavel || '';
+  const body = isStatus ? `
+    <div class="field-grid">
+      <div class="field"><label>Nº da Ficha</label><div class="readonly-chip">${esc(item.numeroFicha || 'S/N')}</div></div>
+      <div class="field"><label>Status desejado <span class="req">*</span></label><select name="status" required>
+        <option value="departamento_visat" ${statusValue==='departamento_visat'?'selected':''}>Departamento VISAT</option>
+        <option value="com_enfermeiro" ${statusValue==='com_enfermeiro'?'selected':''}>Com enfermeiro</option>
+        <option value="devolvida" ${statusValue==='devolvida'?'selected':''}>Devolvida à Epidemio</option>
+      </select></div>
+    </div>
+    <div class="field-grid" style="margin-top:12px"><div class="field" id="controleNurseField"><label>Enfermeiro responsável <span class="req">*</span></label><select name="enfermeiro"><option value="">Selecione</option>${CONTROLE_FICHA_NURSES.map(n=>`<option value="${esc(n)}" ${n===nurseValue?'selected':''}>${esc(n)}</option>`).join('')}</select></div>${controleModalField(statusValue==='devolvida'?'Data da devolução':'Data da mudança','dataStatus',dateValue,'date',true)}</div>
+    <div class="field" style="margin-top:12px">${controleModalField('Observações','observacoes',item.observacoes||'','text',false)}</div>` : `
+    <div class="field-grid">
+      ${controleModalField('Nº da Ficha','numeroFicha',item?.numeroFicha||'','text',true)}
+      ${controleModalField(isNew?'Data de recebimento':'Data de entrada','dataRecebimento',dateValue,'date',true)}
+    </div>
+    <div id="controleLinkPreview" class="controle-link-preview"></div>
+    <div class="field" style="margin-top:12px">${controleModalField('Observações','observacoes',item?.observacoes||'','text',false)}</div>`;
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-bg" id="controleModal" onclick="if(event.target===this)closeControleModal()"><div class="modal controle-modal"><h3>${title}</h3><p>${isNew?'Registre uma ficha recebida da Epidemiologia. Ela começará no Departamento VISAT.':isStatus?'A alteração será registrada no histórico interno desta ficha.':'Corrija o número, a data de entrada ou as observações sem alterar o histórico de status.'}</p><form id="controleModalForm">${body}<div class="row"><button type="button" class="btn btn-ghost" onclick="closeControleModal()">Cancelar</button><button type="submit" class="btn btn-primary">Salvar</button></div></form></div></div>`);
+  const form = document.getElementById('controleModalForm');
+  const numberInput = form?.elements.numeroFicha;
+  const preview = document.getElementById('controleLinkPreview');
+  const refreshPreview = ()=>{
+    if(!preview || !numberInput) return;
+    const linked = findLinkedRecord(numberInput.value);
+    preview.innerHTML = linked ? `<span class="badge green">Ficha encontrada</span> ${esc(linked.patientName||'Paciente sem nome')} · acidente: ${esc(fmtDate(linked.dataAcidente || linked.dataAcidenteBio || linked.dataDiagnosticoLD || linked.dataDiagnosticoMental))}` : '<span class="badge amber">Sem correspondência</span> O número poderá ser mantido como texto livre.';
+  };
+  if(numberInput){ numberInput.addEventListener('input', refreshPreview); refreshPreview(); }
+  if(isStatus){
+    const statusInput = form.elements.status;
+    const nurseField = document.getElementById('controleNurseField');
+    const syncNurse = ()=>{ nurseField.style.display = statusInput.value === 'com_enfermeiro' ? '' : 'none'; form.elements.enfermeiro.required = statusInput.value === 'com_enfermeiro'; };
+    statusInput.addEventListener('change', syncNurse); syncNurse();
+  }
+  form?.addEventListener('submit', async event=>{
+    event.preventDefault();
+    const data = new FormData(form);
+    if(isStatus){
+      const target = String(data.get('status')||'');
+      const nurse = String(data.get('enfermeiro')||'');
+      if(target === 'com_enfermeiro' && !CONTROLE_FICHA_NURSES.includes(nurse)){ showToast('Selecione Julio Cesar ou Luciane Manhães.'); return; }
+      const next = {...item, status:target, enfermeiroResponsavel:target==='com_enfermeiro'?nurse:target==='devolvida'?(item.enfermeiroResponsavel||''):'', dataStatusAtual:String(data.get('dataStatus')||todayISO()), observacoes:String(data.get('observacoes')||'').trim()};
+      if(target === 'com_enfermeiro') next.dataAtribuicaoEnfermeiro = next.dataStatusAtual;
+      if(target === 'devolvida') next.dataDevolucaoEpidemio = next.dataStatusAtual;
+      next.historico = [...(item.historico||[]), {statusAnterior:item.status||null,statusNovo:target,enfermeiroAnterior:item.enfermeiroResponsavel||null,enfermeiroNovo:next.enfermeiroResponsavel||null,dataMudanca:new Date().toISOString(),observacoes:next.observacoes||''}];
+      if(await upsertControleFichaRemote(next)){ controleFichas = controleFichas.map(x=>x.id===item.id?next:x); closeControleModal(); render(); showToast('Status atualizado.'); }
+      else showToast('Não foi possível salvar o status.');
+      return;
+    }
+    const numero = String(data.get('numeroFicha')||'').trim();
+    const duplicate = controleFichas.find(x=>normalizeControleFicha(x.numeroFicha)===normalizeControleFicha(numero) && x.id !== item?.id);
+    if(duplicate){ showToast('Esta ficha já está no Controle de Fichas.'); return; }
+    const next = isNew ? {
+      id:`cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`,
+      controleFicha:true,
+      numeroFicha:numero || 'S/N',
+      status:'departamento_visat',
+      enfermeiroResponsavel:'',
+      dataRecebimentoEpidemio:String(data.get('dataRecebimento')||todayISO()),
+      dataAtribuicaoEnfermeiro:'',
+      dataDevolucaoEpidemio:'',
+      dataStatusAtual:String(data.get('dataRecebimento')||todayISO()),
+      observacoes:String(data.get('observacoes')||'').trim(),
+      historico:[],
+      createdAt:new Date().toISOString(),
+    } : {...item, numeroFicha:numero || 'S/N', dataRecebimentoEpidemio:String(data.get('dataRecebimento')||item.dataRecebimentoEpidemio||todayISO()), observacoes:String(data.get('observacoes')||'').trim()};
+    if(await upsertControleFichaRemote(next)){ if(isNew) controleFichas.push(next); else controleFichas = controleFichas.map(x=>x.id===item.id?next:x); closeControleModal(); render(); showToast(isNew?'Entrada registrada.':'Entrada corrigida.'); }
+    else showToast('Não foi possível salvar a entrada.');
+  });
+}
+
 /* ============================= AUTENTICAÇÃO ============================= */
 let currentUser = null;
 
@@ -2734,6 +2945,7 @@ const APP_SHELL_HTML = `
     <div class="nav-item" data-view="analytics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>Dashboard Analítico</div>
     <div class="nav-item" data-view="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>Painel</div>
     <div class="nav-item" data-view="consulta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Consulta de Fichas</div>
+    <div class="nav-item" data-view="controleFichas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>Controle de Fichas</div>
     <div class="nav-item" data-view="form"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Novo Registro</div>
     <div class="nav-group-title">Anos anteriores</div>
     <div class="nav-item nav-subitem" data-view="analytics2025"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>Dashboard 2025</div>
@@ -3004,6 +3216,7 @@ function render(){
     analytics2024:['Dashboard 2024','Painel anual independente de 2024'],
     comparison:['Comparativo anual','Comparação dos indicadores por ano'],
     consulta:['Consulta de Fichas','Buscar, filtrar e gerenciar notificações registradas — 2026'],
+    controleFichas:['Controle de Fichas','Fluxo de recebimento, atribuição e devolução — Epidemiologia / VISAT'],
     form:[editingId? 'Editar Registro':'Novo Registro','Ficha de Investigação — Acidente de Trabalho'],
     print:['Visualizar / Imprimir','Ficha de Investigação — Acidente de Trabalho'],
   };
@@ -3016,6 +3229,7 @@ function render(){
   else if(view==='analytics2024') c.innerHTML = renderAnalytics('2024');
   else if(view==='comparison') c.innerHTML = renderAnnualComparison();
   else if(view==='consulta') c.innerHTML = renderConsulta();
+  else if(view==='controleFichas') c.innerHTML = renderControleFichas();
   else if(view==='form') c.innerHTML = renderForm();
   else if(view==='print') c.innerHTML = renderPrint(editingId);
   if(view==='form'){
