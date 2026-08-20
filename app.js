@@ -4334,6 +4334,41 @@ const PDF_AUTOFILL_FIELDS = {
   unidadeSaude:'Unidade de Saúde notificadora', dataNotificacao:'Data da notificação', dataAcidente:'Data do acidente', municipioNotificacao:'Município de notificação', ufNotificacao:'UF de notificação',
   ocupacao:'Ocupação', numeroSinan:'Nº do SINAN', cbo:'CBO', cnae:'Classe CNAE', nomeEmpresa:'Nome da empresa', causaCID10:'Causa do acidente (CID-10)', diagnosticoLesaoCID10:'Diagnóstico da lesão (CID-10)', tipoAcidente:'Tipo de acidente'
 };
+const PDF_OPTION_AUTOFILL_FIELDS = {
+  tipoExposicao:'Tipo de exposição — opções circuladas',
+  usoEPI:'Uso de EPI — opções circuladas',
+  condutaMomentoAcidente:'Conduta no momento do acidente — opções circuladas'
+};
+// Caixas relativas à página 2 do questionário SINAN de exposição a material biológico.
+// Cada caixa contém o código manuscrito/circulado da alternativa. O leitor só usa os
+// códigos 1, 2 e 9, sem interpretar o texto impresso da alternativa.
+const HANDWRITING_OPTION_GROUPS = {
+  tipoExposicao:{page:2, mode:'binary', options:[
+    {label:'Percutânea', box:[.337,.064,.368,.083]},
+    {label:'Mucosa (oral/ocular)', box:[.337,.080,.368,.108]},
+    {label:'Pele íntegra', box:[.502,.058,.530,.083]},
+    {label:'Pele não íntegra', box:[.502,.078,.530,.110]},
+    {label:'Outros', box:[.675,.050,.705,.075]}
+  ]},
+  usoEPI:{page:2, mode:'binary', options:[
+    {label:'LUVA', box:[.152,.350,.182,.382]},
+    {label:'Avental', box:[.238,.350,.270,.382]},
+    {label:'Óculos', box:[.345,.350,.378,.382]},
+    {label:'Máscara', box:[.450,.350,.485,.382]},
+    {label:'Proteção facial', box:[.585,.350,.616,.382]},
+    {label:'Bota', box:[.770,.350,.802,.382]}
+  ]},
+  condutaMomentoAcidente:{page:2, mode:'binary', options:[
+    {label:'Sem indicação de quimioprofilaxia', box:[.140,.505,.176,.535]},
+    {label:'Recusou quimioprofilaxia indicada', box:[.140,.535,.176,.565]},
+    {label:'AZT+3TC', box:[.140,.565,.176,.595]},
+    {label:'AZT+3TC+Indinavir', box:[.405,.505,.442,.535]},
+    {label:'AZT+3TC+Nelfinavir', box:[.405,.535,.442,.565]},
+    {label:'Imunoglobulina humana contra hepatite B (HBIG)', box:[.405,.565,.442,.595]},
+    {label:'Vacina contra hepatite B', box:[.642,.500,.676,.535]}
+  ]}
+};
+function allPdfAutofillFields(){ return {...PDF_AUTOFILL_FIELDS, ...PDF_OPTION_AUTOFILL_FIELDS}; }
 let pdfReaderPromise = null;
 let pdfOcrPromise = null;
 function loadVisatExternalScript(src, globalName){
@@ -4368,6 +4403,17 @@ function ensurePdfOcr(){
   return pdfOcrPromise;
 }
 let pdfHandwritingPipelinePromise = null;
+let pdfDigitWorkerPromise = null;
+async function ensurePdfDigitOcr(){
+  if(!pdfDigitWorkerPromise){
+    pdfDigitWorkerPromise = ensurePdfOcr().then(async TesseractLib=>{
+      const worker = await TesseractLib.createWorker('eng', 1);
+      if(worker?.setParameters) await worker.setParameters({tessedit_char_whitelist:'129', classify_bln_numeric_mode:'1', preserve_interword_spaces:'0'});
+      return worker;
+    });
+  }
+  return pdfDigitWorkerPromise;
+}
 async function ensurePdfHandwritingOcr(){
   if(!pdfHandwritingPipelinePromise){
     pdfHandwritingPipelinePromise = (async()=>{
@@ -4426,7 +4472,7 @@ function cepFromText(value){
   const cep = match?.[1] || '';
   return cep ? cep.replace(/[. ]/g,'-') : '';
 }
-const PDF_OCR_NOISE_WORDS = new Set(['the','of','to','was','and','a','an','full','person','frequently','referred','former','fundamental','condition','display','improve','construction','station','reduce','thought','united','states','president','common','relationship','i','you','this','that','with','from','for','is','in','on']);
+const PDF_OCR_NOISE_WORDS = new Set(['the','of','to','was','and','a','an','full','person','frequently','referred','former','fundamental','condition','display','improve','construction','station','reduce','thought','united','states','president','common','relationship','i','you','this','that','with','from','for','is','in','on','successful','team','youngest','institutional','legislation','address','institute','department','government','information']);
 function isLikelyPdfOcrNoise(value){
   const raw = String(value || '').replace(/\s+/g,' ').trim();
   if(!raw) return true;
@@ -4435,7 +4481,10 @@ function isLikelyPdfOcrNoise(value){
   if(tokens.filter(token=>token.length === 1).length >= 2) return true;
   const noiseCount = tokens.filter(token=>PDF_OCR_NOISE_WORDS.has(token)).length;
   if(noiseCount >= 2) return true;
+  if(tokens.length === 1 && noiseCount === 1) return true;
   if(tokens.length >= 5 && noiseCount >= 1) return true;
+  if(tokens.length >= 3 && noiseCount >= 2) return true;
+  if(/\b(?:successful\s+team|the\s+youngest|youngest\s+(?:institutional|legislation)|institutional\s+(?:legislation|address)|a\s+successful)\b/i.test(raw)) return true;
   if(/\d/.test(raw)) return true;
   if(/\b(?:representando|interesses|trabalhador|exerc[ií]cio|durante|instala[cç][oõ]es|contratante|c[oó]d(?:igo)?|unid(?:ade)?|acidente)\b/i.test(raw)) return true;
   return false;
@@ -4626,10 +4675,227 @@ async function extractHandwrittenFieldValues(canvas, recognizer){
   }
   return fields;
 }
+function makeHandwritingCrop(canvas, rect, padding=.14, scale=3){
+  const left = Math.round(canvas.width * rect[0]);
+  const top = Math.round(canvas.height * rect[1]);
+  const width = Math.max(18, Math.round(canvas.width * (rect[2] - rect[0])));
+  const height = Math.max(18, Math.round(canvas.height * (rect[3] - rect[1])));
+  const padX = Math.round(width * padding);
+  const padY = Math.round(height * padding);
+  const sourceLeft = Math.max(0, left - padX);
+  const sourceTop = Math.max(0, top - padY);
+  const sourceWidth = Math.min(canvas.width - sourceLeft, width + padX * 2);
+  const sourceHeight = Math.min(canvas.height - sourceTop, height + padY * 2);
+  const crop = document.createElement('canvas');
+  crop.width = Math.max(72, sourceWidth * scale);
+  crop.height = Math.max(54, sourceHeight * scale);
+  const context = crop.getContext('2d', {willReadFrequently:true});
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, crop.width, crop.height);
+  context.imageSmoothingEnabled = true;
+  context.drawImage(canvas, sourceLeft, sourceTop, sourceWidth, sourceHeight, 0, 0, crop.width, crop.height);
+  return crop;
+}
+function optionInkEvidence(crop){
+  const context = crop.getContext('2d', {willReadFrequently:true});
+  const image = context.getImageData(0, 0, crop.width, crop.height).data;
+  const grayValues = [];
+  const coreGrayValues = [];
+  let blue = 0;
+  let coreBlue = 0;
+  let total = 0;
+  let coreTotal = 0;
+  const x0 = Math.floor(crop.width * .14), x1 = Math.ceil(crop.width * .86);
+  const y0 = Math.floor(crop.height * .14), y1 = Math.ceil(crop.height * .86);
+  const cx0 = Math.floor(crop.width * .25), cx1 = Math.ceil(crop.width * .75);
+  const cy0 = Math.floor(crop.height * .22), cy1 = Math.ceil(crop.height * .78);
+  for(let y=y0; y<y1; y++){
+    for(let x=x0; x<x1; x++){
+      const i = (y * crop.width + x) * 4;
+      const r=image[i], g=image[i+1], b=image[i+2];
+      const gray = (r + g + b) / 3;
+      grayValues.push(gray);
+      if(b - r > 14 && b - g > 6 && b > 65) blue++;
+      total++;
+      if(x>=cx0 && x<cx1 && y>=cy0 && y<cy1){
+        coreGrayValues.push(gray);
+        if(b - r > 14 && b - g > 6 && b > 65) coreBlue++;
+        coreTotal++;
+      }
+    }
+  }
+  grayValues.sort((a,b)=>a-b);
+  const background = grayValues[Math.floor(grayValues.length * .58)] ?? 255;
+  const relativeThreshold = Math.max(95, background - 30);
+  const coreDarkRatio = coreGrayValues.length ? coreGrayValues.filter(value=>value < 185).length / coreGrayValues.length : 0;
+  const relativeDarkRatio = coreGrayValues.length ? coreGrayValues.filter(value=>value < relativeThreshold).length / coreGrayValues.length : 0;
+  return {
+    darkRatio:total ? grayValues.filter(value=>value < 185).length / total : 0,
+    blueRatio:total ? blue / total : 0,
+    coreDarkRatio,
+    relativeDarkRatio,
+    coreBlueRatio:coreTotal ? coreBlue / coreTotal : 0,
+    background,
+    relativeThreshold
+  };
+}
+function optionCropVariants(crop, evidence){
+  const variants = [crop.toDataURL('image/png')];
+  const grayCanvas = document.createElement('canvas');
+  grayCanvas.width = crop.width;
+  grayCanvas.height = crop.height;
+  const context = grayCanvas.getContext('2d', {willReadFrequently:true});
+  context.drawImage(crop, 0, 0);
+  const data = context.getImageData(0, 0, crop.width, crop.height);
+  const threshold = evidence?.relativeThreshold || 180;
+  for(let i=0; i<data.data.length; i+=4){
+    const value = Math.round((data.data[i] + data.data[i+1] + data.data[i+2]) / 3);
+    const normalized = Math.max(0, Math.min(255, Math.round((value - threshold) * 255 / Math.max(1, 255 - threshold))));
+    data.data[i] = normalized;
+    data.data[i+1] = normalized;
+    data.data[i+2] = normalized;
+  }
+  context.putImageData(data, 0, 0);
+  variants.push(grayCanvas.toDataURL('image/png'));
+  const invertedCanvas = document.createElement('canvas');
+  invertedCanvas.width = crop.width;
+  invertedCanvas.height = crop.height;
+  const invertedContext = invertedCanvas.getContext('2d', {willReadFrequently:true});
+  invertedContext.drawImage(crop, 0, 0);
+  const invertedData = invertedContext.getImageData(0, 0, crop.width, crop.height);
+  for(let i=0; i<invertedData.data.length; i+=4){
+    const value = Math.round((invertedData.data[i] + invertedData.data[i+1] + invertedData.data[i+2]) / 3);
+    const inverted = 255 - value;
+    invertedData.data[i] = inverted;
+    invertedData.data[i+1] = inverted;
+    invertedData.data[i+2] = inverted;
+  }
+  invertedContext.putImageData(invertedData, 0, 0);
+  variants.push(invertedCanvas.toDataURL('image/png'));
+  // A foto mostra os códigos manuscritos dentro de quadrinhos pequenos. As variantes
+  // anteriores ainda carregavam parte da moldura e do rótulo; estas duas usam somente
+  // o núcleo ampliado do quadrinho, preservando o dígito sem a borda impressa.
+  for(const [left,top,right,bottom] of [[.20,.16,.80,.84],[.30,.24,.70,.76]]){
+    const coreCanvas = document.createElement('canvas');
+    const sourceLeft = Math.round(crop.width * left);
+    const sourceTop = Math.round(crop.height * top);
+    const sourceWidth = Math.max(12, Math.round(crop.width * (right-left)));
+    const sourceHeight = Math.max(12, Math.round(crop.height * (bottom-top)));
+    coreCanvas.width = Math.max(96, sourceWidth * 8);
+    coreCanvas.height = Math.max(96, sourceHeight * 8);
+    const coreContext = coreCanvas.getContext('2d', {willReadFrequently:true});
+    coreContext.fillStyle = '#fff';
+    coreContext.fillRect(0, 0, coreCanvas.width, coreCanvas.height);
+    coreContext.imageSmoothingEnabled = true;
+    coreContext.drawImage(crop, sourceLeft, sourceTop, sourceWidth, sourceHeight, 0, 0, coreCanvas.width, coreCanvas.height);
+    variants.push(coreCanvas.toDataURL('image/png'));
+    const coreData = coreContext.getImageData(0, 0, coreCanvas.width, coreCanvas.height);
+    for(let i=0; i<coreData.data.length; i+=4){
+      const value = Math.round((coreData.data[i] + coreData.data[i+1] + coreData.data[i+2]) / 3);
+      const normalized = value < (evidence?.relativeThreshold || 180) ? 0 : 255;
+      coreData.data[i] = normalized;
+      coreData.data[i+1] = normalized;
+      coreData.data[i+2] = normalized;
+    }
+    coreContext.putImageData(coreData, 0, 0);
+    variants.push(coreCanvas.toDataURL('image/png'));
+  }
+  return variants;
+}
+function optionCodeFromOcr(value){
+  const raw = String(value || '').toUpperCase().replace(/O/g,'0').replace(/[IL]/g,'1');
+  const codes = [...new Set((raw.match(/[129]/g) || []))];
+  return codes.length === 1 ? codes[0] : '';
+}
+function exactOptionCodeFromTesseract(result){
+  const text = String(result?.data?.text || result?.text || '').toUpperCase().replace(/[\s|]/g,'');
+  return /^[129]$/.test(text) ? text : '';
+}
+async function readMarkedOptionCode(canvas, rect, recognizer, digitWorker){
+  const crop = makeHandwritingCrop(canvas, rect, .42, 5);
+  const evidence = optionInkEvidence(crop);
+  // A blank printed square has almost no ink in its interior. The threshold is
+  // relative to the local paper tone because scans may be dark or 1-bit grayscale.
+  if(evidence.relativeDarkRatio < .018 && evidence.coreBlueRatio < .0025 && evidence.coreDarkRatio < .018) return {marked:false, code:'', evidence};
+  try{
+    const raws = [];
+    const images = optionCropVariants(crop, evidence);
+    if(digitWorker){
+      const digitCodes = [];
+      for(const image of images){
+        try{
+          const digitResult = await digitWorker.recognize(image);
+          const digitCode = exactOptionCodeFromTesseract(digitResult);
+          if(digitCode) digitCodes.push(digitCode);
+        }catch(error){
+          console.warn('Falha no OCR numérico da opção manuscrita.', error);
+        }
+      }
+      const digitCounts = digitCodes.reduce((acc, code)=>{ acc[code] = (acc[code] || 0) + 1; return acc; }, {});
+      const orderedDigits = Object.entries(digitCounts).sort((a,b)=>b[1]-a[1]);
+      const winner = orderedDigits[0];
+      // A single OCR hit is not enough: a printed glyph or a stroke can look like 1/2/9.
+      // Accept only when at least two independent preprocessing variants agree.
+      if(winner && winner[1] >= 2 && (!orderedDigits[1] || winner[1] > orderedDigits[1][1])){
+        return {marked:true, code:winner[0], raw:`Tesseract-consenso:${digitCodes.join(',')}`, evidence};
+      }
+      return {marked:true, code:'', raw:`Tesseract-sem-consenso:${digitCodes.join(',')}`, evidence};
+    }
+    for(const image of images){
+      const result = await recognizer(image, {max_new_tokens:8});
+      const raw = Array.isArray(result) ? result.map(item=>item?.generated_text || '').join(' ') : (result?.generated_text || '');
+      if(raw) raws.push(raw);
+    }
+    // TrOCR is retained only as a diagnostic fallback when Tesseract is unavailable;
+    // its free-form text is not allowed to fill a checkbox without exact consensus.
+    return {marked:true, code:'', raw:raws.join(' | '), evidence};
+  }catch(error){
+    console.warn('Falha ao reconhecer código de opção manuscrita.', error);
+    return {marked:true, code:'', evidence};
+  }
+}
+async function extractHandwrittenOptionValues(pdf, recognizer, digitWorker){
+  const fields = {};
+  const unresolved = [];
+  const diagnostics = [];
+  const pageNumbers = [...new Set(Object.values(HANDWRITING_OPTION_GROUPS).map(config=>config.page))];
+  const canvases = {};
+  for(const pageNumber of pageNumbers){
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({scale:2.15});
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    await page.render({canvasContext:canvas.getContext('2d'), viewport}).promise;
+    canvases[pageNumber] = canvas;
+  }
+  const groups = Object.entries(HANDWRITING_OPTION_GROUPS);
+  let groupIndex = 0;
+  for(const [key, config] of groups){
+    groupIndex++;
+    setPdfStatus(`Leitura das opções circuladas: grupo ${groupIndex}/${groups.length} — ${PDF_OPTION_AUTOFILL_FIELDS[key]}...`);
+    const canvas = canvases[config.page];
+    const results = [];
+    for(const option of config.options){
+      const result = await readMarkedOptionCode(canvas, option.box, recognizer, digitWorker);
+      diagnostics.push({key, label:option.label, marked:result.marked, code:result.code || '', raw:result.raw || '', evidence:result.evidence || {}});
+      if(result.marked) results.push({option, ...result});
+    }
+    if(!results.length) continue;
+    const invalid = results.some(result=>!['1','2','9'].includes(result.code));
+    const selected = results.filter(result=>result.code === '1').map(result=>result.option.label);
+    // Opções positivas com consenso podem ser sugeridas/aplicadas individualmente,
+    // mas qualquer código divergente ou não lido mantém o grupo inteiro em vermelho.
+    // Assim a leitura ajuda sem esconder uma decisão que ainda exige conferência visual.
+    if(selected.length) fields[key] = selected;
+    if(invalid || !selected.length) unresolved.push(key);
+  }
+  return {fields, unresolved, diagnostics};
+}
 async function extractHandwrittenPdfText(pdf){
   setPdfStatus('Carregando o leitor de escrita manual; o modelo pode levar alguns segundos na primeira ficha...');
   const recognizer = await ensurePdfHandwritingOcr();
-  setPdfStatus('Modelo de escrita manual carregado. Preparando a primeira página...');
+  setPdfStatus('Modelo de escrita manual carregado. Preparando as páginas da ficha...');
   const recognized = [];
   const fields = {};
   const page = await pdf.getPage(1);
@@ -4639,9 +4905,16 @@ async function extractHandwrittenPdfText(pdf){
   canvas.height = Math.ceil(viewport.height);
   await page.render({canvasContext:canvas.getContext('2d'), viewport}).promise;
   Object.assign(fields, await extractHandwrittenFieldValues(canvas, recognizer));
+  let digitWorker = null;
+  try{ digitWorker = await ensurePdfDigitOcr(); }catch(error){ console.warn('OCR numérico das opções indisponível.', error); }
+  const optionResult = await extractHandwrittenOptionValues(pdf, recognizer, digitWorker);
+  Object.assign(fields, optionResult.fields);
   setPdfStatus('Leitura manuscrita concluída. Validando os campos reconhecidos...');
-  Object.values(fields).forEach(value=>{ if(value && !recognized.includes(value)) recognized.push(value); });
-  return {text:recognized.join('\n'), fields};
+  Object.values(fields).forEach(value=>{
+    const values = Array.isArray(value) ? value : [value];
+    values.forEach(item=>{ if(item && !recognized.includes(item)) recognized.push(item); });
+  });
+  return {text:recognized.join('\n'), fields, optionFields:optionResult.fields, optionUnresolved:optionResult.unresolved, optionDiagnostics:optionResult.diagnostics};
 }
 async function extractPdfText(file){
   const pdfjs = await ensurePdfReader();
@@ -4659,6 +4932,8 @@ async function extractPdfText(file){
   let ocrText = '';
   let handwritingText = '';
   let handwritingFields = {};
+  let handwritingOptionUnresolved = [];
+  let handwritingOptionDiagnostics = [];
   let ocrWarning = '';
   try{
     const TesseractLib = await ensurePdfOcr();
@@ -4682,6 +4957,8 @@ async function extractPdfText(file){
     const handwritingResult = await extractHandwrittenPdfText(pdf);
     handwritingText = handwritingResult.text || '';
     handwritingFields = handwritingResult.fields || {};
+    handwritingOptionUnresolved = handwritingResult.optionUnresolved || [];
+    handwritingOptionDiagnostics = handwritingResult.optionDiagnostics || [];
   }catch(error){
     console.warn('Reconhecimento manuscrito não disponível.', error);
     ocrWarning = `${ocrWarning} O reconhecimento manuscrito não pôde ser carregado; confira os campos em vermelho.`.trim();
@@ -4690,8 +4967,10 @@ async function extractPdfText(file){
   return {
     text:combined,
     usedOcr:Boolean(ocrText.trim()),
-    usedHandwritingOcr:Boolean(handwritingText.trim() || Object.keys(handwritingFields).length),
+    usedHandwritingOcr:Boolean(handwritingText.trim() || Object.keys(handwritingFields).length || handwritingOptionUnresolved.length),
     handwritingFields,
+    handwritingOptionUnresolved,
+    handwritingOptionDiagnostics,
     pages:pdf.numPages,
     warning:ocrWarning || (handwritingText.trim() ? 'Foi usada leitura manuscrita assistida. Confira nomes, datas, números e códigos antes de salvar.' : 'A ficha parece ser manuscrita ou sem texto selecionável. Confira os campos em vermelho.')
   };
@@ -4709,7 +4988,7 @@ function refreshPdfAutoSummary(){
   }
 }
 function updatePdfFieldVisual(key){
-  const input = document.querySelector(`#mainForm [data-k="${key}"]`);
+  const input = document.querySelector(`#mainForm [data-k="${key}"]`) || document.querySelector(`#mainForm [data-ck="${key}"]`);
   const fieldEl = input?.closest('.field');
   if(!fieldEl) return;
   const unresolved = pdfAutoState.unresolved.includes(key);
@@ -4720,9 +4999,16 @@ function updatePdfFieldVisual(key){
   else if(autofilled) fieldEl.title = 'Campo preenchido pela leitura automática. Confira antes de salvar.';
   else fieldEl.removeAttribute('title');
 }
-function applyPdfFieldVisuals(){ Object.keys(PDF_AUTOFILL_FIELDS).forEach(updatePdfFieldVisual); }
+function applyPdfFieldVisuals(){ Object.keys(allPdfAutofillFields()).forEach(updatePdfFieldVisual); }
 function setExtractedFormValue(key, value){
   if(!value || !isValidPdfExtractedValue(key, value) || !isEmpty(formData[key])) return false;
+  if(Object.prototype.hasOwnProperty.call(PDF_OPTION_AUTOFILL_FIELDS, key)){
+    formData[key] = Array.isArray(value) ? value : [value];
+    document.querySelectorAll(`#mainForm [data-ck="${key}"]`).forEach(input=>{
+      input.checked = formData[key].includes(input.value);
+    });
+    return true;
+  }
   setFormFieldValue(key, value);
   return true;
 }
@@ -4733,11 +5019,15 @@ async function readAndFillPdf(file){
       ? {...(result.handwritingFields || {})}
       : parsePdfFields(result.text);
     const filled = [];
-    Object.keys(PDF_AUTOFILL_FIELDS).forEach(key=>{
+    const optionKeys = formData.agravoType === 'biologico' ? Object.keys(PDF_OPTION_AUTOFILL_FIELDS) : [];
+    [...Object.keys(PDF_AUTOFILL_FIELDS), ...optionKeys].forEach(key=>{
       if(setExtractedFormValue(key, parsed[key])) filled.push(key);
     });
-    const unresolved = Object.keys(PDF_AUTOFILL_FIELDS).filter(key=>isEmpty(formData[key]));
-    pdfAutoState = {active:true, processing:false, filled, unresolved, warnings:[...(result.warning?[result.warning]:[]), ...(result.usedOcr && !result.usedHandwritingOcr?['A ficha foi lida por OCR; confirme especialmente nomes, códigos e datas.']:[]), ...(result.usedHandwritingOcr?['A ficha foi considerada manuscrita: somente campos validados por recorte foram aplicados; confirme cada campo antes de salvar.']:[])], text:result.text};
+    const unresolved = [...new Set([
+      ...Object.keys(PDF_AUTOFILL_FIELDS).filter(key=>isEmpty(formData[key])),
+      ...((result.usedHandwritingOcr && formData.agravoType === 'biologico') ? (result.handwritingOptionUnresolved || []) : [])
+    ])];
+    pdfAutoState = {active:true, processing:false, filled, unresolved, warnings:[...(result.warning?[result.warning]:[]), ...(result.usedOcr && !result.usedHandwritingOcr?['A ficha foi lida por OCR; confirme especialmente nomes, códigos e datas.']:[]), ...(result.usedHandwritingOcr?['A ficha foi considerada manuscrita: os códigos circulados só foram aplicados quando a marcação e o código foram validados. Confira cada campo antes de salvar.']:[])], text:result.text};
     setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). ${result.usedHandwritingOcr ? 'Leitura manuscrita concluída; confira os campos em vermelho.' : 'Será enviado ao salvar.'}`);
     refreshPdfAutoSummary();
     applyPdfFieldVisuals();
@@ -5109,7 +5399,7 @@ function renderPage2Biologico(){
       <div class="sec-title">Acidente com Exposição a Material Biológico</div>
       <div class="field-grid">
         ${field({num:'', label:'Data do Acidente', key:'dataAcidenteBio', type:'date', required:true})}
-        ${checkboxGroup({num:46, label:'Tipo de Exposição', key:'tipoExposicao', options:['Percutânea','Mucosa (oral/ocular)','Pele íntegra','Pele não íntegra']})}
+        ${checkboxGroup({num:46, label:'Tipo de Exposição', key:'tipoExposicao', options:['Percutânea','Mucosa (oral/ocular)','Pele íntegra','Pele não íntegra','Outros']})}
         ${field({num:'', label:'Outro Tipo de Exposição', key:'tipoExposicaoOutro'})}
         ${field({num:47, label:'Material Orgânico', key:'materialOrganico', type:'select', required:true, options:[['1','Sangue'],['2','Líquor'],['3','Líquido pleural'],['4','Líquido ascítico'],['5','Líquido amniótico'],['6','Fluido com sangue'],['7','Soro/plasma'],['8','Outros'],['9','Ignorado']]})}
         ${field({num:'', label:'Outro Material Orgânico', key:'materialOrganicoOutro'})}
@@ -5288,13 +5578,16 @@ function lookupCnaeForOccupation(occupation){
 function bindFormEvents(){
   const form = document.getElementById('mainForm');
   if(!form) return;
-  form.addEventListener('input', e=>{
-    if(e.target.dataset.k && pdfAutoState.active){
-      const key = e.target.dataset.k;
+  const handleManualFieldChange = e=>{
+    const key = e.target.dataset.k || e.target.dataset.ck;
+    if(key && pdfAutoState.active){
       pdfAutoState.unresolved = pdfAutoState.unresolved.filter(item=>item !== key);
       updatePdfFieldVisual(key);
       refreshPdfAutoSummary();
     }
+  };
+  form.addEventListener('input', e=>{
+    handleManualFieldChange(e);
     if(e.target.dataset.k === 'dataNascimento'){
       formData.dataNascimento = e.target.value;
       const chip = document.getElementById('idadeChip');
@@ -5320,6 +5613,7 @@ function bindFormEvents(){
       handleAutocomplete(e.target);
     }
   });
+  form.addEventListener('change', handleManualFieldChange);
   const pdfInput = document.getElementById('pdfFichaInput');
   if(pdfInput) pdfInput.addEventListener('change', ()=>handlePdfInput(pdfInput));
   document.querySelectorAll('.ac-list').forEach(list=>{
