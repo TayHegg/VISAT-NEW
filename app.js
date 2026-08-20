@@ -2998,12 +2998,12 @@ function goTo(v, id){
 function render(){
   document.querySelectorAll('.nav-item').forEach(el=> el.classList.toggle('active', el.dataset.view===view));
   const titles = {
-    dashboard:['Painel','Visão geral das notificações e pendências'],
-    analytics:['Dashboard Analítico','Painel de Controle de Acidentes e Agravos Relacionados ao Trabalho'],
+    dashboard:['Painel','Visão geral das notificações e pendências — registros de 2026'],
+    analytics:['Dashboard Analítico','Painel de Controle de Acidentes e Agravos Relacionados ao Trabalho — 2026'],
     analytics2025:['Dashboard 2025','Painel anual independente de 2025'],
     analytics2024:['Dashboard 2024','Painel anual independente de 2024'],
     comparison:['Comparativo anual','Comparação dos indicadores por ano'],
-    consulta:['Consulta de Fichas','Buscar, filtrar e gerenciar notificações registradas'],
+    consulta:['Consulta de Fichas','Buscar, filtrar e gerenciar notificações registradas — 2026'],
     form:[editingId? 'Editar Registro':'Novo Registro','Ficha de Investigação — Acidente de Trabalho'],
     print:['Visualizar / Imprimir','Ficha de Investigação — Acidente de Trabalho'],
   };
@@ -3193,6 +3193,10 @@ function yearFromRecord(r){
 function recordsForYear(year){
   return year ? records.filter(r=>yearFromRecord(r)===String(year)) : records;
 }
+const OPERATIONAL_YEAR = '2026';
+function operationalRecords(){
+  return recordsForYear(OPERATIONAL_YEAR);
+}
 function annualStats(year){
   const list = recordsForYear(year);
   const byType = {};
@@ -3289,7 +3293,7 @@ function renderAnalytics(forcedYear=''){
     </div>
     <div class="fb-actions"><button class="btn btn-ghost btn-sm" onclick="limparFiltrosDash()">Limpar Filtros</button></div>
   </div>
-  ${!records.length ? `<div class="panel"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg><div>Nenhuma notificação cadastrada ainda. Cadastre registros para visualizar o dashboard.</div></div></div>` : `
+  ${!sourceRecords.length ? `<div class="panel"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg><div>Nenhuma notificação de ${esc(forcedYear || OPERATIONAL_YEAR)} encontrada para os filtros aplicados.</div></div></div>` : `
   <div class="analytics-layout">
       <div class="indicator-col">
       <div class="ind-card total is-clickable ${analyticsCardFilter==='all'?'selected':''}" role="button" tabindex="0" title="Clique para listar todas as fichas filtradas" onclick="setAnalyticsCardFilter('all')"><div class="n">${total}</div><div class="l">Total Geral de Ocorrências</div></div>
@@ -3730,18 +3734,19 @@ function renderFichaSelectionList(list){
 }
 
 function renderDashboard(){
-  const withAlerts = records.map(r=>({r, alerts:computeAlerts(r), level: null}));
+  const sourceRecords = operationalRecords();
+  const withAlerts = sourceRecords.map(r=>({r, alerts:computeAlerts(r), level: null}));
   withAlerts.forEach(x=> x.level = worstLevel(x.alerts));
   const nRed = withAlerts.filter(x=>x.level==='red').length;
   const nAmber = withAlerts.filter(x=>x.level==='amber').length;
   const nGreen = withAlerts.filter(x=>x.level==='green').length;
-  const nCatPend = records.filter(r=>!isImportedRecord(r) && r.agravoType==='grave' && r.foiEmitidaCAT==='2').length;
+  const nCatPend = sourceRecords.filter(r=>!isImportedRecord(r) && r.agravoType==='grave' && r.foiEmitidaCAT==='2').length;
 
-  if(!records.length){
+  if(!sourceRecords.length){
     return `<div class="panel"><div class="empty-state">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v3M16 3v3"/></svg>
-      <div>Nenhuma notificação registrada ainda.</div>
-      <button class="btn btn-primary" style="margin-top:14px" onclick="goTo('form')">Criar primeiro registro</button>
+      <div>Nenhuma notificação de 2026 encontrada.</div>
+      <button class="btn btn-primary" style="margin-top:14px" onclick="goTo('form')">Criar primeiro registro de 2026</button>
     </div></div>`;
   }
 
@@ -3762,11 +3767,11 @@ function renderDashboard(){
       </div>`;
     });
 
-  const dashboardSelection = dashboardCardFilter === 'all' ? records : withAlerts.filter(x=>x.level===dashboardCardFilter).map(x=>x.r);
+  const dashboardSelection = dashboardCardFilter === 'all' ? sourceRecords : withAlerts.filter(x=>x.level===dashboardCardFilter).map(x=>x.r);
 
   return `
     <div class="grid-stats">
-      <div class="stat-card primary is-clickable ${dashboardCardFilter==='all'?'selected':''}" role="button" tabindex="0" title="Clique para listar todas as fichas" onclick="setDashboardCardFilter('all')"><div class="n">${records.length}</div><div class="l">Total de registros</div></div>
+      <div class="stat-card primary is-clickable ${dashboardCardFilter==='all'?'selected':''}" role="button" tabindex="0" title="Clique para listar todas as fichas de 2026" onclick="setDashboardCardFilter('all')"><div class="n">${sourceRecords.length}</div><div class="l">Total de registros — 2026</div></div>
       <div class="stat-card red is-clickable ${dashboardCardFilter==='red'?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas com pendência crítica" onclick="setDashboardCardFilter('red')"><div class="n">${nRed}</div><div class="l">Com pendência crítica</div></div>
       <div class="stat-card amber is-clickable ${dashboardCardFilter==='amber'?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas com pendência de atenção" onclick="setDashboardCardFilter('amber')"><div class="n">${nAmber}</div><div class="l">Com pendência de atenção</div></div>
       <div class="stat-card green is-clickable ${dashboardCardFilter==='green'?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas sem pendências" onclick="setDashboardCardFilter('green')"><div class="n">${nGreen}</div><div class="l">Sem pendências</div></div>
@@ -3778,7 +3783,7 @@ function renderDashboard(){
     </div>
     <div class="panel">
       <h2>Registros recentes</h2>
-      ${renderMiniTable(records.slice().sort((a,b)=> new Date(b.createdAt)-new Date(a.createdAt)).slice(0,6))}
+      ${renderMiniTable(sourceRecords.slice().sort((a,b)=> new Date(b.createdAt)-new Date(a.createdAt)).slice(0,6))}
     </div>
   `;
 }
@@ -3800,7 +3805,7 @@ function renderMiniTable(list){
 
 /* ============================= CONSULTA ============================= */
 function getFilteredRecords(){
-  let list = records.slice();
+  let list = operationalRecords().slice();
   const s = tableState.search.trim().toLowerCase();
   if(s) list = list.filter(r => (r.patientName||'').toLowerCase().includes(s) || (r.municipioNotificacao||'').toLowerCase().includes(s) || (r.nomeEmpresa||'').toLowerCase().includes(s));
   if(tableState.filterAgravo) list = list.filter(r=> r.agravoType === tableState.filterAgravo);
