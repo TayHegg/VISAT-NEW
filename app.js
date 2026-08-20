@@ -4367,16 +4367,34 @@ function ensurePdfOcr(){
   if(!pdfOcrPromise) pdfOcrPromise = loadVisatExternalScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js','Tesseract');
   return pdfOcrPromise;
 }
+let pdfHandwritingPipelinePromise = null;
+async function ensurePdfHandwritingOcr(){
+  if(!pdfHandwritingPipelinePromise){
+    pdfHandwritingPipelinePromise = (async()=>{
+      const transformers = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+      if(!transformers?.pipeline) throw new Error('Transformers.js não disponibilizou a função pipeline.');
+      return transformers.pipeline('image-to-text','Xenova/trocr-small-handwritten');
+    })();
+  }
+  return pdfHandwritingPipelinePromise;
+}
 function pdfLines(text){
   return String(text || '').replace(/\r/g,'\n').split(/\n+/).map(line=>line.replace(/[ \t]+/g,' ').trim()).filter(Boolean);
+}
+function cleanPdfCandidate(value){
+  const candidate = String(value || '').replace(/^[:#\-\s]+/,'').replace(/\s+/g,' ').trim();
+  if(!candidate || candidate.length < 2) return '';
+  if(/\]\s*(?:data|nome|c[oó]digo|munic[ií]pio|uf|sexo|ra[cç]a|tipo|logradouro|bairro|endere[cç]o)/i.test(candidate)) return '';
+  if(/^(?:data|nome|c[oó]digo|munic[ií]pio|uf|sexo|ra[cç]a|tipo|logradouro|bairro|endere[cç]o|outra fonte notificadora)$/i.test(candidate)) return '';
+  return candidate;
 }
 function lineValue(lines, labelPattern){
   const expression = new RegExp(`(?:${labelPattern})\\s*(?:[:#\\-]|\\s{2,})?\\s*(.*)$`, 'i');
   for(let i=0;i<lines.length;i++){
     const match = lines[i].match(expression);
     if(match && match[1] && match[1].trim().length > 1){
-      const value = match[1].replace(/^[:#\\-\\s]+/,'').trim();
-      if(value && !/^(data|nome|c[oó]digo|munic[ií]pio|uf|sexo|ra[cç]a|tipo)$/i.test(value)) return value;
+      const value = cleanPdfCandidate(match[1]);
+      if(value) return value;
     }
     if(match && (!match[1] || match[1].trim().length <= 1) && lines[i+1] && lines[i+1].length > 1) return lines[i+1];
   }
@@ -4390,12 +4408,57 @@ function isoDateFromValue(value){
   return match ? `${match[1]}-${String(match[2]).padStart(2,'0')}-${String(match[3]).padStart(2,'0')}` : '';
 }
 function cnaeFromText(text){
-  const match = String(text || '').match(/(?:CNAE|classe\s+CNAE)[^0-9]{0,20}(\d{2})\s*[.\-]?\s*(\d{2})\s*-\s*(\d)/i);
-  return match ? `${match[1]}.${match[2]}-${match[3]}` : '';
+  const raw = String(text || '');
+  const match = raw.match(/(?:CNAE|classe\s+CNAE)[^0-9]{0,20}(\d{4})\s*[-.]\s*(\d)/i) || raw.match(/(?:CNAE|classe\s+CNAE)[^0-9]{0,20}(\d{2})\s*[.\-]?\s*(\d{2})\s*-\s*(\d)/i);
+  if(!match) return '';
+  if(match[2] && match[3] && match[1].length === 2) return `${match[1]}.${match[2]}-${match[3]}`;
+  return `${match[1].slice(0,2)}.${match[1].slice(2)}-${match[2]}`;
 }
 function cidFromText(value){
-  const match = String(value || '').toUpperCase().match(/\b([A-Z]\d{2,3})(?:\.\d)?\b/);
+  const match = String(value || '').toUpperCase().match(/\b([A-Z]\d{2,4})(?:\.\d)?\b/);
   return match ? match[1] : '';
+}
+function cepFromText(value){
+  const raw = String(value || '');
+  const labeled = raw.match(/(?:cep|c\.e\.p\.)[^0-9]{0,30}(\d{5}[-. ]?\d{3})/i);
+  const bare = raw.match(/\b(\d{5}[-.]\d{3}|\d{5}\s+\d{3})\b/);
+  const match = labeled || bare;
+  const cep = match?.[1] || '';
+  return cep ? cep.replace(/[. ]/g,'-') : '';
+}
+const PDF_OCR_NOISE_WORDS = new Set(['the','of','to','was','and','a','an','full','person','frequently','referred','former','fundamental','condition','display','improve','construction','station','reduce','thought','united','states','president','common','relationship','i','you','this','that','with','from','for','is','in','on']);
+function isLikelyPdfOcrNoise(value){
+  const raw = String(value || '').replace(/\s+/g,' ').trim();
+  if(!raw) return true;
+  if(/[“”"…]{1,}|\.{2,}/.test(raw)) return true;
+  const tokens = raw.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').split(/[^a-z0-9]+/).filter(Boolean);
+  if(tokens.filter(token=>token.length === 1).length >= 2) return true;
+  const noiseCount = tokens.filter(token=>PDF_OCR_NOISE_WORDS.has(token)).length;
+  if(noiseCount >= 2) return true;
+  if(tokens.length >= 5 && noiseCount >= 1) return true;
+  if(/\d/.test(raw)) return true;
+  if(/\b(?:representando|interesses|trabalhador|exerc[ií]cio|durante|instala[cç][oõ]es|contratante|c[oó]d(?:igo)?|unid(?:ade)?|acidente)\b/i.test(raw)) return true;
+  return false;
+}
+function isValidPdfExtractedValue(key, value){
+  const text = String(value || '').trim();
+  if(!text || /\]|\[[0-9]/.test(text)) return false;
+  if(['patientName','motherName','resLogradouro','resBairro','resMunicipio','unidadeSaude','municipioNotificacao','ocupacao','nomeEmpresa'].includes(key)){
+    if(isLikelyPdfOcrNoise(text)) return false;
+    return /[A-Za-zÀ-ÿ]{3}/.test(text) && !/(?:c[oó]digo|data|sexo|logradouro|bairro|munic[ií]pio|outra fonte notificadora)/i.test(text);
+  }
+  if(['dataNascimento','dataNotificacao','dataAcidente'].includes(key)) return /^\d{4}-\d{2}-\d{2}$/.test(text);
+  if(['resCep'].includes(key)) return /^\d{5}-\d{3}$/.test(text);
+  if(['resUf','ufNotificacao'].includes(key)) return /^[A-Z]{2}$/.test(text);
+  if(key === 'fichaNumero') return /^(?:\d{1,8}|S\/N)$/i.test(text);
+  if(key === 'sexo') return ['M','F','I'].includes(text);
+  if(key === 'racaCor') return Boolean(text);
+  if(key === 'numeroSinan') return /^\d{3,12}$/.test(text);
+  if(key === 'cbo') return /^\d{4,6}$/.test(text);
+  if(key === 'cnae') return /^(?:\d{2}[.]\d{2}-\d|\d{4}-\d)$/.test(text);
+  if(['causaCID10','diagnosticoLesaoCID10'].includes(key)) return /^[A-Z]\d{2,4}$/.test(text);
+  if(key === 'tipoAcidente') return ['1','2','9'].includes(text);
+  return true;
 }
 function normalizePdfSex(value){
   const text = normalizeSearchText(value);
@@ -4420,14 +4483,17 @@ function parsePdfFields(text){
   const raw = String(text || '');
   const lines = pdfLines(raw);
   const fields = {};
-  const set = (key,value)=>{ if(value !== undefined && value !== null && String(value).trim()) fields[key] = String(value).trim(); };
+  const set = (key,value)=>{
+    const candidate = String(value ?? '').trim();
+    if(candidate && isValidPdfExtractedValue(key,candidate)) fields[key] = candidate;
+  };
   set('fichaNumero', (lineValue(lines,'(?:n[ºo°]?\\.?\\s*(?:da\\s*)?ficha|n[uú]mero\\s+da\\s+ficha)') || '').match(/\b(\d{1,8}|S\s*\/\s*N)\b/i)?.[1]?.replace(/\s+/g,'') || '');
   set('patientName', lineValue(lines,'nome\\s+(?:completo\\s+)?(?:do\\s+)?paciente|nome\\s+do\\s+acidentado'));
   set('motherName', lineValue(lines,'nome\\s+da\\s+m[ãa]e'));
   set('dataNascimento', isoDateFromValue(lineValue(lines,'data\\s+de\\s+nascimento')));
   set('sexo', normalizePdfSex(lineValue(lines,'sexo')));
   set('racaCor', normalizePdfRace(lineValue(lines,'ra[cç]a\\s*[/\\-]?\\s*cor')));
-  set('resCep', (raw.match(/\b\d{5}[-. ]?\d{3}\b/) || [])[0]?.replace(/[. ]/g,'-') || '');
+  set('resCep', cepFromText(raw));
   set('resLogradouro', lineValue(lines,'logradouro|endere[cç]o\\s+de\\s+resid[eê]ncia'));
   set('resBairro', lineValue(lines,'bairro\\s+de\\s+resid[eê]ncia|bairro'));
   set('resMunicipio', lineValue(lines,'munic[ií]pio\\s+de\\s+resid[eê]ncia|munic[ií]pio\\s+de\\s+residente'));
@@ -4438,11 +4504,11 @@ function parsePdfFields(text){
   set('municipioNotificacao', lineValue(lines,'munic[ií]pio\\s+de\\s+notifica[cç][aã]o'));
   set('ufNotificacao', (lineValue(lines,'UF\\s+de\\s+notifica[cç][aã]o').match(/\b[A-Z]{2}\b/i) || [])[0]?.toUpperCase() || '');
   set('ocupacao', lineValue(lines,'ocupa[cç][aã]o|profiss[aã]o'));
-  set('numeroSinan', (raw.match(/SINAN[^0-9]{0,15}(\d{3,12})/i) || [])[1] || '');
-  set('cbo', (raw.match(/CBO[^0-9]{0,15}(\d{4,6})/i) || [])[1] || '');
+  set('numeroSinan', (raw.match(/(?:n[ºo°]?\s*(?:do\s*)?sinan|n[uú]mero\s+do\s+sinan)[^0-9]{0,30}(\d{3,12})/i) || [])[1] || '');
+  set('cbo', (raw.match(/(?:n[ºo°]?\s*)?cbo[^0-9]{0,30}(\d{4,6})/i) || [])[1] || '');
   set('cnae', cnaeFromText(raw));
   set('nomeEmpresa', lineValue(lines,'nome\\s+da\\s+empresa|empregador|empresa'));
-  set('causaCID10', cidFromText(lineValue(lines,'c[oó]digo\\s+da\\s+causa\\s+do\\s+acidente|causa\\s+do\\s+acidente')) || cidFromText((raw.match(/\b[V-Y]\d{2}(?:\.\d)?\b/i) || [])[0] || ''));
+  set('causaCID10', cidFromText(lineValue(lines,'c[oó]digo\\s+da\\s+causa\\s+do\\s+acidente|causa\\s+do\\s+acidente|agravo.?doen[cç]a[^\\n]{0,30}CID')));
   set('diagnosticoLesaoCID10', cidFromText(lineValue(lines,'diagn[oó]stico\\s+da\\s+les[aã]o|les[aã]o\\s+CID')));
   set('tipoAcidente', normalizePdfAccidentType(lineValue(lines,'tipo\\s+de\\s+acidente')));
   if(!fields.cbo && fields.ocupacao){
@@ -4461,6 +4527,122 @@ function textContentToLines(content){
   });
   return [...rows.entries()].sort((a,b)=>b[0]-a[0]).map(([,items])=>items.join(' ').trim()).filter(Boolean).join('\n');
 }
+function canvasLineCrops(canvas){
+  const width = canvas.width;
+  const height = canvas.height;
+  const ctx = canvas.getContext('2d', {willReadFrequently:true});
+  const pixels = ctx.getImageData(0, 0, width, height).data;
+  const density = new Array(height).fill(0);
+  for(let y=0; y<height; y++){
+    let dark = 0;
+    for(let x=0; x<width; x+=2){
+      const i = (y * width + x) * 4;
+      const luminance = (pixels[i] * 0.299) + (pixels[i+1] * 0.587) + (pixels[i+2] * 0.114);
+      if(luminance < 210) dark++;
+    }
+    density[y] = dark / Math.max(1, Math.ceil(width / 2));
+  }
+  const bands = [];
+  let start = -1;
+  const threshold = Math.max(0.004, Math.min(0.035, 260 / Math.max(1, width * height)));
+  for(let y=0; y<height; y++){
+    const active = density[y] > threshold;
+    if(active && start < 0) start = y;
+    if(!active && start >= 0){
+      if(y - start >= 8) bands.push([start, y]);
+      start = -1;
+    }
+  }
+  if(start >= 0 && height - start >= 8) bands.push([start, height]);
+  const merged = [];
+  bands.forEach(([top,bottom])=>{
+    const previous = merged[merged.length - 1];
+    if(previous && top - previous[1] < 18){ previous[1] = bottom; }
+    else merged.push([top,bottom]);
+  });
+  return merged.filter(([top,bottom])=>bottom-top >= 12 && bottom-top <= Math.max(420, height * 0.16)).slice(0, 90).map(([top,bottom])=>{
+    const crop = document.createElement('canvas');
+    const padY = 18;
+    const cropTop = Math.max(0, top - padY);
+    const cropBottom = Math.min(height, bottom + padY);
+    crop.width = Math.min(width, 1800);
+    crop.height = cropBottom - cropTop;
+    const cropCtx = crop.getContext('2d');
+    cropCtx.fillStyle = '#fff';
+    cropCtx.fillRect(0, 0, crop.width, crop.height);
+    cropCtx.drawImage(canvas, 0, cropTop, crop.width, crop.height, 0, 0, crop.width, crop.height);
+    return crop;
+  });
+}
+const HANDWRITING_FIELD_BOXES = {
+  causaCID10:[.58,.235,.73,.275], dataNotificacao:[.72,.235,.98,.275], municipioNotificacao:[.14,.255,.72,.30],
+  unidadeSaude:[.13,.30,.66,.35], dataAcidente:[.74,.30,.98,.345], patientName:[.13,.345,.70,.40], dataNascimento:[.71,.345,.98,.40],
+  motherName:[.40,.415,.95,.46], resUf:[.13,.445,.22,.485], resMunicipio:[.22,.445,.61,.485], resBairro:[.13,.485,.36,.525],
+  resLogradouro:[.36,.485,.78,.525], resCep:[.79,.555,.98,.605], ocupacao:[.13,.645,.56,.70], cbo:[.55,.645,.83,.70],
+  cnae:[.13,.765,.40,.815], nomeEmpresa:[.43,.765,.78,.815]
+};
+function normalizeHandwritingField(key, value){
+  const raw = String(value || '').replace(/\s+/g,' ').trim();
+  if(!raw) return '';
+  if(['dataNascimento','dataNotificacao','dataAcidente'].includes(key)) return isoDateFromValue(raw);
+  if(key === 'sexo') return normalizePdfSex(raw);
+  if(key === 'resCep') return cepFromText(raw);
+  if(key === 'causaCID10' || key === 'diagnosticoLesaoCID10') return cidFromText(raw);
+  if(key === 'cnae'){
+    const match = raw.match(/\b(\d{4})\s*[-.]\s*(\d)\b/) || raw.match(/\b(\d{2})\s*[.]?\s*(\d{2})\s*[-.]\s*(\d)\b/);
+    return match ? (match[3] ? `${match[1]}.${match[2]}-${match[3]}` : `${match[1].slice(0,2)}.${match[1].slice(2)}-${match[2]}`) : '';
+  }
+  if(key === 'cbo') return (raw.match(/\b\d{4,6}\b/) || [])[0] || '';
+  return cleanPdfCandidate(raw);
+}
+async function extractHandwrittenFieldValues(canvas, recognizer){
+  const fields = {};
+  const entries = Object.entries(HANDWRITING_FIELD_BOXES);
+  let index = 0;
+  for(const [key, rect] of entries){
+    index++;
+    const label = PDF_AUTOFILL_FIELDS[key] || key;
+    setPdfStatus(`Leitura manuscrita: analisando ${index}/${entries.length} — ${label}...`);
+    try{
+      const crop = document.createElement('canvas');
+      const left = Math.round(canvas.width * rect[0]);
+      const top = Math.round(canvas.height * rect[1]);
+      const width = Math.max(24, Math.round(canvas.width * (rect[2] - rect[0])));
+      const height = Math.max(24, Math.round(canvas.height * (rect[3] - rect[1])));
+      crop.width = width;
+      crop.height = height;
+      const context = crop.getContext('2d');
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, width, height);
+      context.drawImage(canvas, left, top, width, height, 0, 0, width, height);
+      const result = await recognizer(crop.toDataURL('image/png'), {max_new_tokens:40});
+      const value = Array.isArray(result) ? result.map(item=>item?.generated_text || '').join(' ') : (result?.generated_text || '');
+      const normalized = normalizeHandwritingField(key, value);
+      const freeTextKey = ['patientName','motherName','resLogradouro','resBairro','resMunicipio','unidadeSaude','municipioNotificacao','ocupacao','nomeEmpresa'].includes(key);
+      if(normalized && (!freeTextKey || !isLikelyPdfOcrNoise(value)) && isValidPdfExtractedValue(key, normalized)) fields[key] = normalized;
+    }catch(error){
+      console.warn(`Falha ao reconhecer o campo manuscrito ${key}.`, error);
+    }
+  }
+  return fields;
+}
+async function extractHandwrittenPdfText(pdf){
+  setPdfStatus('Carregando o leitor de escrita manual; o modelo pode levar alguns segundos na primeira ficha...');
+  const recognizer = await ensurePdfHandwritingOcr();
+  setPdfStatus('Modelo de escrita manual carregado. Preparando a primeira página...');
+  const recognized = [];
+  const fields = {};
+  const page = await pdf.getPage(1);
+  const viewport = page.getViewport({scale:2.15});
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  await page.render({canvasContext:canvas.getContext('2d'), viewport}).promise;
+  Object.assign(fields, await extractHandwrittenFieldValues(canvas, recognizer));
+  setPdfStatus('Leitura manuscrita concluída. Validando os campos reconhecidos...');
+  Object.values(fields).forEach(value=>{ if(value && !recognized.includes(value)) recognized.push(value); });
+  return {text:recognized.join('\n'), fields};
+}
 async function extractPdfText(file){
   const pdfjs = await ensurePdfReader();
   const pdf = await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
@@ -4471,14 +4653,19 @@ async function extractPdfText(file){
     textPages.push(textContentToLines(content));
   }
   const text = textPages.join('\n');
-  if(text.replace(/\s/g,'').length >= 40) return {text, usedOcr:false, pages:pdf.numPages};
+  const nativeParsed = typeof parsePdfFields === 'function' ? parsePdfFields(text) : {};
+  const nativeRecognizedCount = Object.values(nativeParsed).filter(value=>!isEmpty(value)).length;
+  if(text.replace(/\s/g,'').length >= 40 && nativeRecognizedCount >= 4) return {text, usedOcr:false, usedHandwritingOcr:false, pages:pdf.numPages};
   let ocrText = '';
+  let handwritingText = '';
+  let handwritingFields = {};
+  let ocrWarning = '';
   try{
     const TesseractLib = await ensurePdfOcr();
     const worker = await TesseractLib.createWorker('por');
-    for(let pageNumber=1; pageNumber<=Math.min(pdf.numPages,12); pageNumber++){
+      for(let pageNumber=1; pageNumber<=Math.min(pdf.numPages,4); pageNumber++){
       const page = await pdf.getPage(pageNumber);
-      const viewport = page.getViewport({scale:1.65});
+      const viewport = page.getViewport({scale:1.9});
       const canvas = document.createElement('canvas');
       canvas.width = Math.ceil(viewport.width);
       canvas.height = Math.ceil(viewport.height);
@@ -4487,11 +4674,27 @@ async function extractPdfText(file){
       ocrText += `\n${result?.data?.text || ''}`;
     }
     await worker.terminate();
-    return {text:ocrText.trim() || text, usedOcr:true, pages:pdf.numPages};
   }catch(error){
-    console.warn('OCR do PDF não disponível; mantendo somente o texto selecionável.', error);
-    return {text, usedOcr:false, pages:pdf.numPages, warning:'O PDF parece ser uma imagem e o OCR não foi concluído. Confira os campos em vermelho.'};
+    console.warn('OCR convencional do PDF não disponível.', error);
+    ocrWarning = 'O OCR convencional não foi concluído; a leitura manuscrita será tentada se possível.';
   }
+  try{
+    const handwritingResult = await extractHandwrittenPdfText(pdf);
+    handwritingText = handwritingResult.text || '';
+    handwritingFields = handwritingResult.fields || {};
+  }catch(error){
+    console.warn('Reconhecimento manuscrito não disponível.', error);
+    ocrWarning = `${ocrWarning} O reconhecimento manuscrito não pôde ser carregado; confira os campos em vermelho.`.trim();
+  }
+  const combined = [ocrText.trim(), handwritingText.trim(), text].filter(Boolean).join('\n');
+  return {
+    text:combined,
+    usedOcr:Boolean(ocrText.trim()),
+    usedHandwritingOcr:Boolean(handwritingText.trim() || Object.keys(handwritingFields).length),
+    handwritingFields,
+    pages:pdf.numPages,
+    warning:ocrWarning || (handwritingText.trim() ? 'Foi usada leitura manuscrita assistida. Confira nomes, datas, números e códigos antes de salvar.' : 'A ficha parece ser manuscrita ou sem texto selecionável. Confira os campos em vermelho.')
+  };
 }
 function refreshPdfAutoSummary(){
   const current = document.getElementById('pdfAutoSummary');
@@ -4519,21 +4722,23 @@ function updatePdfFieldVisual(key){
 }
 function applyPdfFieldVisuals(){ Object.keys(PDF_AUTOFILL_FIELDS).forEach(updatePdfFieldVisual); }
 function setExtractedFormValue(key, value){
-  if(!value || !isEmpty(formData[key])) return false;
+  if(!value || !isValidPdfExtractedValue(key, value) || !isEmpty(formData[key])) return false;
   setFormFieldValue(key, value);
   return true;
 }
 async function readAndFillPdf(file){
   try{
     const result = await extractPdfText(file);
-    const parsed = parsePdfFields(result.text);
+    const parsed = result.usedHandwritingOcr
+      ? {...(result.handwritingFields || {})}
+      : parsePdfFields(result.text);
     const filled = [];
     Object.keys(PDF_AUTOFILL_FIELDS).forEach(key=>{
       if(setExtractedFormValue(key, parsed[key])) filled.push(key);
     });
     const unresolved = Object.keys(PDF_AUTOFILL_FIELDS).filter(key=>isEmpty(formData[key]));
-    pdfAutoState = {active:true, processing:false, filled, unresolved, warnings:[...(result.warning?[result.warning]:[]), ...(result.usedOcr?['A ficha foi lida por OCR; confirme especialmente nomes, códigos e datas.']:[])], text:result.text};
-    setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). Será enviado ao salvar.`);
+    pdfAutoState = {active:true, processing:false, filled, unresolved, warnings:[...(result.warning?[result.warning]:[]), ...(result.usedOcr && !result.usedHandwritingOcr?['A ficha foi lida por OCR; confirme especialmente nomes, códigos e datas.']:[]), ...(result.usedHandwritingOcr?['A ficha foi considerada manuscrita: somente campos validados por recorte foram aplicados; confirme cada campo antes de salvar.']:[])], text:result.text};
+    setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). ${result.usedHandwritingOcr ? 'Leitura manuscrita concluída; confira os campos em vermelho.' : 'Será enviado ao salvar.'}`);
     refreshPdfAutoSummary();
     applyPdfFieldVisuals();
     document.querySelectorAll('#mainForm [data-ac="cid"]').forEach(updateCidDescription);
