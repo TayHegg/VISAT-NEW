@@ -3009,7 +3009,7 @@ function render(){
   document.getElementById('topbarSub').textContent = titles[view][1];
   const c = document.getElementById('content');
   if(view==='dashboard') c.innerHTML = renderDashboard();
-  else if(view==='analytics') c.innerHTML = renderAnalytics();
+  else if(view==='analytics') c.innerHTML = renderAnalytics('2026');
   else if(view==='analytics2025') c.innerHTML = renderAnalytics('2025');
   else if(view==='analytics2024') c.innerHTML = renderAnalytics('2024');
   else if(view==='comparison') c.innerHTML = renderAnnualComparison();
@@ -3266,7 +3266,7 @@ function renderAnalytics(forcedYear=''){
   return `
   <div class="filter-bar">
     <div class="fb-grid">
-      <div><label>Ano</label><select id="fAno" ${forcedYear?'disabled':''}><option value="">Todos</option>${anos.map(a=>`<option value="${a}" ${selectedYear===a?'selected':''}>${a}</option>`).join('')}</select></div>
+      <div><label>Ano</label><select id="fAno" ${forcedYear?'disabled':''}>${forcedYear?'': '<option value="">Todos</option>'}${anos.map(a=>`<option value="${a}" ${selectedYear===a?'selected':''}>${a}</option>`).join('')}</select></div>
       <div><label>Período inicial</label><input type="date" id="fPerIni" value="${dashFilters.periodoIni}"></div>
       <div><label>Período final</label><input type="date" id="fPerFim" value="${dashFilters.periodoFim}"></div>
       <div><label>Mês</label><select id="fMes"><option value="">Todos</option>${MESES.map((m,i)=>`<option value="${String(i+1).padStart(2,'0')}" ${dashFilters.mes===String(i+1).padStart(2,'0')?'selected':''}>${m}</option>`).join('')}</select></div>
