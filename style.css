@@ -411,11 +411,82 @@ tr:hover td{background:var(--surface-2);}
   line-height: 1.35;
 }
 .pdf-upload input[type="file"] {
-  padding: 8px 10px;
-  background: #fff;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
-.pdf-upload .hint {
-  line-height: 1.4;
+.pdf-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pdf-upload-btn {
+  background: #2E6FB0 !important;
+  border-color: #2E6FB0 !important;
+  color: #fff !important;
+}
+.pdf-upload-btn:hover { filter: brightness(.94); }
+.pdf-view-btn:disabled { opacity: .5; cursor: not-allowed; }
+.pdf-upload .hint { line-height: 1.4; }
+.pdf-auto-summary {
+  margin-top: 9px;
+  padding: 9px 11px;
+  border: 1px solid #B9D8C9;
+  border-left: 4px solid #178568;
+  border-radius: 8px;
+  background: #F1FAF5;
+  color: #245846;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.pdf-auto-summary span { display: block; margin-top: 2px; }
+.pdf-auto-summary.has-unresolved {
+  border-color: #E3B1B1;
+  border-left-color: var(--red, #C6423B);
+  background: var(--red-bg, #FBE9E7);
+  color: #8C3434;
+}
+.pdf-auto-summary.processing {
+  border-color: #C7D9E8;
+  border-left-color: var(--primary-2, #15566D);
+  background: #F3F8FC;
+  color: var(--primary-2, #15566D);
+}
+.pdf-auto-warning { margin-top: 6px; font-size: 11px; }
+.pdf-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 5px;
+  border: 2px solid rgba(21,86,109,.25);
+  border-top-color: var(--primary-2, #15566D);
+  border-radius: 50%;
+  vertical-align: -2px;
+  animation: pdf-spin .8s linear infinite;
+}
+@keyframes pdf-spin { to { transform: rotate(360deg); } }
+.field.pdf-unresolved input,
+.field.pdf-unresolved select,
+.field.pdf-unresolved textarea {
+  border-color: var(--red, #C6423B) !important;
+  background: var(--red-bg, #FBE9E7) !important;
+  box-shadow: 0 0 0 1px rgba(198,66,59,.10);
+}
+.field.pdf-unresolved label::after {
+  content: ' — conferir';
+  color: var(--red, #C6423B);
+  font-size: 10px;
+  font-weight: 700;
+}
+.field.pdf-autofilled input,
+.field.pdf-autofilled select,
+.field.pdf-autofilled textarea { border-color: #9ACBB6; }
+@media (max-width: 640px) {
+  .pdf-actions { align-items: stretch; }
+  .pdf-actions .btn { flex: 1 1 160px; }
 }
 .pdf-error {
   color: var(--red, #b64646) !important;

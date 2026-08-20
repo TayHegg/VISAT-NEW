@@ -2656,6 +2656,7 @@ let editingId = null;
 let formPage = 1;
 let formData = {};
 let pdfAttachmentState = {file:null, attachment:null, loading:false, error:''};
+let pdfAutoState = {active:false, processing:false, filled:[], unresolved:[], warnings:[], text:''};
 let tableState = { search:'', sortKey:'fichaNumero', sortDir:1, filterAgravo:'', filterStatus:'', filterSituacao:'', page:1, pageSize:10 };
 let dashFilters = { ano:'2026', periodoIni:'', periodoFim:'', mes:'', agravo:'', unidade:'', municipio:'', bairro:'', ocupacao:'', sexo:'', racaCor:'', escolaridade:'', tipoAcidente:'', status:'', obito:'' };
 let bmSelectedRegion = null;
@@ -2986,6 +2987,7 @@ function goTo(v, id){
     formData = existing ? {...existing} : { id: uid(), agravoType:'grave', status:'aguardando_investigacao', createdAt: new Date().toISOString() };
     applyInvestigatorDefaults();
     pdfAttachmentState = {file:null, attachment:formData.pdfFicha || null, loading:false, error:''};
+    pdfAutoState = {active:false, processing:false, filled:[], unresolved:[], warnings:[], text:''};
   } else if(v==='print'){
     editingId = id || editingId || null;
   }
@@ -3016,7 +3018,10 @@ function render(){
   else if(view==='consulta') c.innerHTML = renderConsulta();
   else if(view==='form') c.innerHTML = renderForm();
   else if(view==='print') c.innerHTML = renderPrint(editingId);
-  if(view==='form') bindFormEvents();
+  if(view==='form'){
+    bindFormEvents();
+    applyPdfFieldVisuals();
+  }
   if(view==='consulta') bindConsultaEvents();
   if(view==='analytics' || view==='analytics2025' || view==='analytics2024') bindAnalyticsEvents();
 }
@@ -4242,21 +4247,43 @@ function applyInvestigatorDefaults(){
     formData.investigadorNome = '';
   }
 }
+function renderPdfAutoSummary(){
+  if(!pdfAutoState.active && !pdfAutoState.processing) return '';
+  if(pdfAutoState.processing){
+    return `<div class="pdf-auto-summary processing" id="pdfAutoSummary"><span class="pdf-spinner" aria-hidden="true"></span> Lendo a ficha e identificando os campos com segurança...</div>`;
+  }
+  const filled = pdfAutoState.filled.length;
+  const unresolved = pdfAutoState.unresolved.length;
+  const warning = pdfAutoState.warnings.length ? `<div class="pdf-auto-warning">${esc(pdfAutoState.warnings.join(' '))}</div>` : '';
+  return `<div class="pdf-auto-summary ${unresolved?'has-unresolved':'complete'}" id="pdfAutoSummary">
+    <strong>Leitura automática concluída.</strong> ${filled} campo(s) preenchido(s).
+    ${unresolved ? `<span>${unresolved} campo(s) não foram compreendidos e estão destacados em vermelho para conferência.</span>` : '<span>Os campos reconhecidos foram preenchidos. Confira antes de salvar.</span>'}
+    ${warning}
+  </div>`;
+}
 function renderPdfUpload(){
   const attachment = pdfAttachmentState.attachment;
   const selected = pdfAttachmentState.file;
+  const canPreview = Boolean(selected || attachment);
   const status = pdfAttachmentState.error
     ? pdfAttachmentState.error
-    : selected
-      ? `PDF selecionado: ${selected.name} (${formatFileSize(selected.size)}). Será enviado ao salvar.`
-      : attachment
-        ? `PDF anexado: ${attachment.name || 'ficha.pdf'}. O vínculo será mantido ao salvar.`
-        : 'Selecione o PDF oficial da ficha. O arquivo será vinculado ao registro após o salvamento.';
-  return `<div class="field pdf-upload">
+    : pdfAutoState.processing
+      ? 'Leitura automática em andamento...'
+      : selected
+        ? `PDF selecionado: ${selected.name} (${formatFileSize(selected.size)}). Será enviado ao salvar.`
+        : attachment
+          ? `PDF anexado: ${attachment.name || 'ficha.pdf'}. O vínculo será mantido ao salvar.`
+          : 'Faça o upload do PDF oficial da ficha para anexá-lo e iniciar a leitura automática.';
+  return `<div class="field pdf-upload span2">
     <label for="pdfFichaInput">Arquivo PDF da Ficha</label>
-    <input id="pdfFichaInput" type="file" accept="application/pdf,.pdf">
+    <div class="pdf-actions no-print">
+      <input id="pdfFichaInput" type="file" accept="application/pdf,.pdf" aria-label="Selecionar PDF da ficha">
+      <button type="button" class="btn btn-primary btn-sm pdf-upload-btn" onclick="document.getElementById('pdfFichaInput').click()">Upload de Ficha</button>
+      <button type="button" class="btn btn-ghost btn-sm pdf-view-btn" onclick="previewCurrentPdf()" ${canPreview?'':'disabled'}>Visualizar ficha</button>
+    </div>
     <span class="hint ${pdfAttachmentState.error?'pdf-error':''}" id="pdfFichaStatus">${esc(status)}</span>
-    ${attachment ? `<div class="pdf-existing no-print"><span>Arquivo já vinculado a esta ficha.</span><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(formData.id)}')">Abrir PDF</button></div>` : ''}
+    ${attachment ? `<div class="pdf-existing no-print"><span>Arquivo já vinculado a esta ficha.</span><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(formData.id)}')">Abrir PDF salvo</button></div>` : ''}
+    ${renderPdfAutoSummary()}
   </div>`;
 }
 function formatFileSize(bytes){
@@ -4265,7 +4292,7 @@ function formatFileSize(bytes){
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 function isPdfFile(file){
-  return Boolean(file && (file.type === 'application/pdf' || /\\.pdf$/i.test(file.name || '')));
+  return Boolean(file && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')));
 }
 function setPdfStatus(message, isError=false){
   const status = document.getElementById('pdfFichaStatus');
@@ -4273,6 +4300,8 @@ function setPdfStatus(message, isError=false){
     status.textContent = message;
     status.classList.toggle('pdf-error', isError);
   }
+  const viewButton = document.querySelector('.pdf-view-btn');
+  if(viewButton) viewButton.disabled = !(pdfAttachmentState.file || pdfAttachmentState.attachment);
 }
 function handlePdfInput(input){
   const file = input?.files?.[0] || null;
@@ -4293,7 +4322,239 @@ function handlePdfInput(input){
   }
   pdfAttachmentState.file = file;
   pdfAttachmentState.error = '';
-  setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). Será enviado ao salvar.`);
+  pdfAutoState = {active:true, processing:true, filled:[], unresolved:[], warnings:[], text:''};
+  setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). Iniciando a leitura automática...`);
+  refreshPdfAutoSummary();
+  readAndFillPdf(file);
+}
+
+const PDF_AUTOFILL_FIELDS = {
+  fichaNumero:'Nº da Ficha', patientName:'Nome do paciente', motherName:'Nome da mãe', dataNascimento:'Data de nascimento', sexo:'Sexo', racaCor:'Raça/Cor',
+  resCep:'CEP', resLogradouro:'Logradouro', resBairro:'Bairro', resMunicipio:'Município de residência', resUf:'UF de residência',
+  unidadeSaude:'Unidade de Saúde notificadora', dataNotificacao:'Data da notificação', dataAcidente:'Data do acidente', municipioNotificacao:'Município de notificação', ufNotificacao:'UF de notificação',
+  ocupacao:'Ocupação', numeroSinan:'Nº do SINAN', cbo:'CBO', cnae:'Classe CNAE', nomeEmpresa:'Nome da empresa', causaCID10:'Causa do acidente (CID-10)', diagnosticoLesaoCID10:'Diagnóstico da lesão (CID-10)', tipoAcidente:'Tipo de acidente'
+};
+let pdfReaderPromise = null;
+let pdfOcrPromise = null;
+function loadVisatExternalScript(src, globalName){
+  if(window[globalName]) return Promise.resolve(window[globalName]);
+  return new Promise((resolve,reject)=>{
+    const existing = document.querySelector(`script[data-visat-loader="${globalName}"]`);
+    if(existing){
+      existing.addEventListener('load', ()=>resolve(window[globalName]), {once:true});
+      existing.addEventListener('error', ()=>reject(new Error(`Não foi possível carregar ${globalName}.`)), {once:true});
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.dataset.visatLoader = globalName;
+    script.onload = ()=>window[globalName] ? resolve(window[globalName]) : reject(new Error(`A biblioteca ${globalName} não ficou disponível.`));
+    script.onerror = ()=>reject(new Error(`Não foi possível carregar a biblioteca de leitura do PDF.`));
+    document.head.appendChild(script);
+  });
+}
+function ensurePdfReader(){
+  if(!pdfReaderPromise){
+    pdfReaderPromise = loadVisatExternalScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js','pdfjsLib').then(lib=>{
+      lib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      return lib;
+    });
+  }
+  return pdfReaderPromise;
+}
+function ensurePdfOcr(){
+  if(!pdfOcrPromise) pdfOcrPromise = loadVisatExternalScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js','Tesseract');
+  return pdfOcrPromise;
+}
+function pdfLines(text){
+  return String(text || '').replace(/\r/g,'\n').split(/\n+/).map(line=>line.replace(/[ \t]+/g,' ').trim()).filter(Boolean);
+}
+function lineValue(lines, labelPattern){
+  const expression = new RegExp(`(?:${labelPattern})\\s*(?:[:#\\-]|\\s{2,})?\\s*(.*)$`, 'i');
+  for(let i=0;i<lines.length;i++){
+    const match = lines[i].match(expression);
+    if(match && match[1] && match[1].trim().length > 1){
+      const value = match[1].replace(/^[:#\\-\\s]+/,'').trim();
+      if(value && !/^(data|nome|c[oó]digo|munic[ií]pio|uf|sexo|ra[cç]a|tipo)$/i.test(value)) return value;
+    }
+    if(match && (!match[1] || match[1].trim().length <= 1) && lines[i+1] && lines[i+1].length > 1) return lines[i+1];
+  }
+  return '';
+}
+function isoDateFromValue(value){
+  const raw = String(value || '').trim();
+  let match = raw.match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})\b/);
+  if(match) return `${match[3]}-${String(match[2]).padStart(2,'0')}-${String(match[1]).padStart(2,'0')}`;
+  match = raw.match(/\b(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})\b/);
+  return match ? `${match[1]}-${String(match[2]).padStart(2,'0')}-${String(match[3]).padStart(2,'0')}` : '';
+}
+function cnaeFromText(text){
+  const match = String(text || '').match(/(?:CNAE|classe\s+CNAE)[^0-9]{0,20}(\d{2})\s*[.\-]?\s*(\d{2})\s*-\s*(\d)/i);
+  return match ? `${match[1]}.${match[2]}-${match[3]}` : '';
+}
+function cidFromText(value){
+  const match = String(value || '').toUpperCase().match(/\b([A-Z]\d{2,3})(?:\.\d)?\b/);
+  return match ? match[1] : '';
+}
+function normalizePdfSex(value){
+  const text = normalizeSearchText(value);
+  if(/masculino|homem|male|\bm\b/.test(text)) return 'M';
+  if(/feminino|mulher|female|\bf\b/.test(text)) return 'F';
+  if(/ignorado|ignorad|indeterminado/.test(text)) return 'I';
+  return '';
+}
+function normalizePdfRace(value){
+  const text = normalizeSearchText(value);
+  const entry = Object.entries(RACA_LABELS).find(([,label])=>normalizeSearchText(label) === text || text.includes(normalizeSearchText(label)));
+  return entry ? entry[0] : '';
+}
+function normalizePdfAccidentType(value){
+  const text = normalizeSearchText(value);
+  if(text.includes('trajeto')) return '2';
+  if(text.includes('tipico') || text.includes('típico')) return '1';
+  if(text.includes('ignorado')) return '9';
+  return '';
+}
+function parsePdfFields(text){
+  const raw = String(text || '');
+  const lines = pdfLines(raw);
+  const fields = {};
+  const set = (key,value)=>{ if(value !== undefined && value !== null && String(value).trim()) fields[key] = String(value).trim(); };
+  set('fichaNumero', (lineValue(lines,'(?:n[ºo°]?\\.?\\s*(?:da\\s*)?ficha|n[uú]mero\\s+da\\s+ficha)') || '').match(/\b(\d{1,8}|S\s*\/\s*N)\b/i)?.[1]?.replace(/\s+/g,'') || '');
+  set('patientName', lineValue(lines,'nome\\s+(?:completo\\s+)?(?:do\\s+)?paciente|nome\\s+do\\s+acidentado'));
+  set('motherName', lineValue(lines,'nome\\s+da\\s+m[ãa]e'));
+  set('dataNascimento', isoDateFromValue(lineValue(lines,'data\\s+de\\s+nascimento')));
+  set('sexo', normalizePdfSex(lineValue(lines,'sexo')));
+  set('racaCor', normalizePdfRace(lineValue(lines,'ra[cç]a\\s*[/\\-]?\\s*cor')));
+  set('resCep', (raw.match(/\b\d{5}[-. ]?\d{3}\b/) || [])[0]?.replace(/[. ]/g,'-') || '');
+  set('resLogradouro', lineValue(lines,'logradouro|endere[cç]o\\s+de\\s+resid[eê]ncia'));
+  set('resBairro', lineValue(lines,'bairro\\s+de\\s+resid[eê]ncia|bairro'));
+  set('resMunicipio', lineValue(lines,'munic[ií]pio\\s+de\\s+resid[eê]ncia|munic[ií]pio\\s+de\\s+residente'));
+  set('resUf', (lineValue(lines,'UF\\s+de\\s+resid[eê]ncia|estado\\s+de\\s+resid[eê]ncia').match(/\b[A-Z]{2}\b/i) || [])[0]?.toUpperCase() || '');
+  set('unidadeSaude', lineValue(lines,'unidade\\s+de\\s+sa[uú]de(?!\\s+do\\s+investigador)|unidade\\s+notificadora'));
+  set('dataNotificacao', isoDateFromValue(lineValue(lines,'data\\s+da\\s+notifica[cç][aã]o|data\\s+de\\s+notifica[cç][aã]o')));
+  set('dataAcidente', isoDateFromValue(lineValue(lines,'data\\s+do\\s+acidente')));
+  set('municipioNotificacao', lineValue(lines,'munic[ií]pio\\s+de\\s+notifica[cç][aã]o'));
+  set('ufNotificacao', (lineValue(lines,'UF\\s+de\\s+notifica[cç][aã]o').match(/\b[A-Z]{2}\b/i) || [])[0]?.toUpperCase() || '');
+  set('ocupacao', lineValue(lines,'ocupa[cç][aã]o|profiss[aã]o'));
+  set('numeroSinan', (raw.match(/SINAN[^0-9]{0,15}(\d{3,12})/i) || [])[1] || '');
+  set('cbo', (raw.match(/CBO[^0-9]{0,15}(\d{4,6})/i) || [])[1] || '');
+  set('cnae', cnaeFromText(raw));
+  set('nomeEmpresa', lineValue(lines,'nome\\s+da\\s+empresa|empregador|empresa'));
+  set('causaCID10', cidFromText(lineValue(lines,'c[oó]digo\\s+da\\s+causa\\s+do\\s+acidente|causa\\s+do\\s+acidente')) || cidFromText((raw.match(/\b[V-Y]\d{2}(?:\.\d)?\b/i) || [])[0] || ''));
+  set('diagnosticoLesaoCID10', cidFromText(lineValue(lines,'diagn[oó]stico\\s+da\\s+les[aã]o|les[aã]o\\s+CID')));
+  set('tipoAcidente', normalizePdfAccidentType(lineValue(lines,'tipo\\s+de\\s+acidente')));
+  if(!fields.cbo && fields.ocupacao){
+    const match = CBO_DB.find(item=>normalizeSearchText(item.desc) === normalizeSearchText(fields.ocupacao));
+    if(match){ set('cbo', match.code); if(!fields.numeroSinan) set('numeroSinan', match.sinan); }
+  }
+  return fields;
+}
+function textContentToLines(content){
+  const rows = new Map();
+  (content.items || []).forEach(item=>{
+    const y = Math.round(item.transform?.[5] || 0);
+    const row = rows.get(y) || [];
+    row.push(String(item.str || ''));
+    rows.set(y,row);
+  });
+  return [...rows.entries()].sort((a,b)=>b[0]-a[0]).map(([,items])=>items.join(' ').trim()).filter(Boolean).join('\n');
+}
+async function extractPdfText(file){
+  const pdfjs = await ensurePdfReader();
+  const pdf = await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
+  const textPages = [];
+  for(let pageNumber=1; pageNumber<=pdf.numPages; pageNumber++){
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    textPages.push(textContentToLines(content));
+  }
+  const text = textPages.join('\n');
+  if(text.replace(/\s/g,'').length >= 40) return {text, usedOcr:false, pages:pdf.numPages};
+  let ocrText = '';
+  try{
+    const TesseractLib = await ensurePdfOcr();
+    const worker = await TesseractLib.createWorker('por');
+    for(let pageNumber=1; pageNumber<=Math.min(pdf.numPages,12); pageNumber++){
+      const page = await pdf.getPage(pageNumber);
+      const viewport = page.getViewport({scale:1.65});
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      await page.render({canvasContext:canvas.getContext('2d'), viewport}).promise;
+      const result = await worker.recognize(canvas);
+      ocrText += `\n${result?.data?.text || ''}`;
+    }
+    await worker.terminate();
+    return {text:ocrText.trim() || text, usedOcr:true, pages:pdf.numPages};
+  }catch(error){
+    console.warn('OCR do PDF não disponível; mantendo somente o texto selecionável.', error);
+    return {text, usedOcr:false, pages:pdf.numPages, warning:'O PDF parece ser uma imagem e o OCR não foi concluído. Confira os campos em vermelho.'};
+  }
+}
+function refreshPdfAutoSummary(){
+  const current = document.getElementById('pdfAutoSummary');
+  const html = renderPdfAutoSummary();
+  if(current){
+    if(html) current.outerHTML = html; else current.remove();
+    return;
+  }
+  if(html){
+    const host = document.querySelector('.pdf-upload');
+    if(host) host.insertAdjacentHTML('beforeend', html);
+  }
+}
+function updatePdfFieldVisual(key){
+  const input = document.querySelector(`#mainForm [data-k="${key}"]`);
+  const fieldEl = input?.closest('.field');
+  if(!fieldEl) return;
+  const unresolved = pdfAutoState.unresolved.includes(key);
+  const autofilled = pdfAutoState.filled.includes(key);
+  fieldEl.classList.toggle('pdf-unresolved', unresolved);
+  fieldEl.classList.toggle('pdf-autofilled', autofilled);
+  if(unresolved) fieldEl.title = 'Campo não compreendido na leitura automática. Confira e preencha manualmente.';
+  else if(autofilled) fieldEl.title = 'Campo preenchido pela leitura automática. Confira antes de salvar.';
+  else fieldEl.removeAttribute('title');
+}
+function applyPdfFieldVisuals(){ Object.keys(PDF_AUTOFILL_FIELDS).forEach(updatePdfFieldVisual); }
+function setExtractedFormValue(key, value){
+  if(!value || !isEmpty(formData[key])) return false;
+  setFormFieldValue(key, value);
+  return true;
+}
+async function readAndFillPdf(file){
+  try{
+    const result = await extractPdfText(file);
+    const parsed = parsePdfFields(result.text);
+    const filled = [];
+    Object.keys(PDF_AUTOFILL_FIELDS).forEach(key=>{
+      if(setExtractedFormValue(key, parsed[key])) filled.push(key);
+    });
+    const unresolved = Object.keys(PDF_AUTOFILL_FIELDS).filter(key=>isEmpty(formData[key]));
+    pdfAutoState = {active:true, processing:false, filled, unresolved, warnings:[...(result.warning?[result.warning]:[]), ...(result.usedOcr?['A ficha foi lida por OCR; confirme especialmente nomes, códigos e datas.']:[])], text:result.text};
+    setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). Será enviado ao salvar.`);
+    refreshPdfAutoSummary();
+    applyPdfFieldVisuals();
+    document.querySelectorAll('#mainForm [data-ac="cid"]').forEach(updateCidDescription);
+  }catch(error){
+    console.error('Falha na leitura automática do PDF', error);
+    pdfAutoState = {active:true, processing:false, filled:[], unresolved:Object.keys(PDF_AUTOFILL_FIELDS).filter(key=>isEmpty(formData[key])), warnings:['Não foi possível interpretar o PDF automaticamente. Confira e preencha manualmente os campos em vermelho.'], text:''};
+    setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). O arquivo será enviado ao salvar, mas a leitura automática falhou.`, true);
+    refreshPdfAutoSummary();
+    applyPdfFieldVisuals();
+  }
+}
+function previewCurrentPdf(){
+  if(pdfAttachmentState.file){
+    const url = URL.createObjectURL(pdfAttachmentState.file);
+    const popup = window.open(url, '_blank', 'noopener');
+    if(popup) window.setTimeout(()=>URL.revokeObjectURL(url), 60000);
+    else showToast('O navegador bloqueou a visualização. Permita pop-ups para o VISAT.');
+    return;
+  }
+  if(pdfAttachmentState.attachment) openPdfForRecord(formData.id);
+  else showToast('Faça o upload de um PDF antes de visualizar a ficha.');
 }
 function sanitizeFileName(name){
   return String(name || 'ficha.pdf').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(-100) || 'ficha.pdf';
@@ -4823,6 +5084,12 @@ function bindFormEvents(){
   const form = document.getElementById('mainForm');
   if(!form) return;
   form.addEventListener('input', e=>{
+    if(e.target.dataset.k && pdfAutoState.active){
+      const key = e.target.dataset.k;
+      pdfAutoState.unresolved = pdfAutoState.unresolved.filter(item=>item !== key);
+      updatePdfFieldVisual(key);
+      refreshPdfAutoSummary();
+    }
     if(e.target.dataset.k === 'dataNascimento'){
       formData.dataNascimento = e.target.value;
       const chip = document.getElementById('idadeChip');
