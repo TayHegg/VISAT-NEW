@@ -2656,6 +2656,7 @@ let editingId = null;
 let formPage = 1;
 let formData = {};
 let pdfAttachmentState = {file:null, attachment:null, loading:false, error:''};
+let pdfPreviewState = {open:false, url:'', revoke:false, kind:'application/pdf', name:''};
 let pdfAutoState = {active:false, processing:false, filled:[], unresolved:[], warnings:[], text:''};
 let tableState = { search:'', sortKey:'fichaNumero', sortDir:1, filterAgravo:'', filterStatus:'', filterSituacao:'', page:1, pageSize:10 };
 let dashFilters = { ano:'2026', periodoIni:'', periodoFim:'', mes:'', agravo:'', unidade:'', municipio:'', bairro:'', ocupacao:'', sexo:'', racaCor:'', escolaridade:'', tipoAcidente:'', status:'', obito:'' };
@@ -3290,6 +3291,7 @@ function goTo(v, id){
     const existing = id ? records.find(r=>r.id===id) : null;
     formData = existing ? {...existing} : { id: uid(), agravoType:'grave', status:'aguardando_investigacao', createdAt: new Date().toISOString() };
     applyInvestigatorDefaults();
+    clearPdfPreview();
     pdfAttachmentState = {file:null, attachment:formData.pdfFicha || null, loading:false, error:''};
     pdfAutoState = {active:false, processing:false, filled:[], unresolved:[], warnings:[], text:''};
   } else if(v==='print'){
@@ -4591,9 +4593,10 @@ function renderPdfUpload(){
     <div class="pdf-actions no-print">
       <input id="pdfFichaInput" type="file" accept="application/pdf,.pdf" aria-label="Selecionar PDF da ficha">
       <button type="button" class="btn btn-primary btn-sm pdf-upload-btn" onclick="document.getElementById('pdfFichaInput').click()">Upload de Ficha</button>
-      <button type="button" class="btn btn-ghost btn-sm pdf-view-btn" onclick="previewCurrentPdf()" ${canPreview?'':'disabled'}>Visualizar ficha</button>
+      <button type="button" class="btn btn-ghost btn-sm pdf-view-btn" onclick="previewCurrentPdf()" ${canPreview?'':'disabled'}>${pdfPreviewState.open?'Fechar visualização':'Visualizar ficha'}</button>
     </div>
     <span class="hint ${pdfAttachmentState.error?'pdf-error':''}" id="pdfFichaStatus">${esc(status)}</span>
+    <div id="pdfPreviewPanelHost">${renderPdfPreviewPanel()}</div>
     ${attachment ? `<div class="pdf-existing no-print"><span>Arquivo já vinculado a esta ficha.</span><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(formData.id)}')">Abrir PDF salvo</button></div>` : ''}
     ${renderPdfAutoSummary()}
   </div>`;
@@ -4618,6 +4621,8 @@ function setPdfStatus(message, isError=false){
 function handlePdfInput(input){
   const file = input?.files?.[0] || null;
   if(!file) return;
+  clearPdfPreview();
+  refreshPdfPreviewPanel();
   if(!isPdfFile(file)){
     input.value = '';
     pdfAttachmentState.file = null;
@@ -5352,16 +5357,56 @@ async function readAndFillPdf(file){
     applyPdfFieldVisuals();
   }
 }
-function previewCurrentPdf(){
+function renderPdfPreviewPanel(){
+  if(!pdfPreviewState.open || !pdfPreviewState.url) return '';
+  const isImage = /^image\//i.test(pdfPreviewState.kind || '');
+  const content = isImage
+    ? `<img class="pdf-preview-image" src="${esc(pdfPreviewState.url)}" alt="Visualização da ficha ${esc(pdfPreviewState.name || '')}">`
+    : `<iframe class="pdf-preview-frame" src="${esc(pdfPreviewState.url)}" title="Visualização da ficha" loading="lazy"></iframe>`;
+  return `<div class="pdf-preview-panel" id="pdfPreviewPanel">
+    <div class="pdf-preview-header"><strong>Visualização da ficha</strong><span>${esc(pdfPreviewState.name || 'Arquivo anexado')}</span></div>
+    ${content}
+  </div>`;
+}
+function refreshPdfPreviewPanel(){
+  const host = document.getElementById('pdfPreviewPanelHost');
+  if(host) host.innerHTML = renderPdfPreviewPanel();
+  const button = document.querySelector('.pdf-view-btn');
+  if(button){
+    button.disabled = !(pdfAttachmentState.file || pdfAttachmentState.attachment);
+    button.textContent = pdfPreviewState.open ? 'Fechar visualização' : 'Visualizar ficha';
+  }
+}
+function clearPdfPreview(){
+  if(pdfPreviewState.revoke && pdfPreviewState.url) URL.revokeObjectURL(pdfPreviewState.url);
+  pdfPreviewState = {open:false, url:'', revoke:false, kind:'application/pdf', name:''};
+}
+function closePdfPreview(){
+  clearPdfPreview();
+  refreshPdfPreviewPanel();
+}
+async function previewCurrentPdf(){
+  if(pdfPreviewState.open){ closePdfPreview(); return; }
+  let url = '';
+  let revoke = false;
+  let kind = 'application/pdf';
+  let name = '';
   if(pdfAttachmentState.file){
-    const url = URL.createObjectURL(pdfAttachmentState.file);
-    const popup = window.open(url, '_blank', 'noopener');
-    if(popup) window.setTimeout(()=>URL.revokeObjectURL(url), 60000);
-    else showToast('O navegador bloqueou a visualização. Permita pop-ups para o VISAT.');
+    url = URL.createObjectURL(pdfAttachmentState.file);
+    revoke = true;
+    kind = pdfAttachmentState.file.type || 'application/pdf';
+    name = pdfAttachmentState.file.name || 'ficha.pdf';
+  }else if(pdfAttachmentState.attachment){
+    url = await getPdfAttachmentUrl(pdfAttachmentState.attachment);
+    kind = pdfAttachmentState.attachment.contentType || 'application/pdf';
+    name = pdfAttachmentState.attachment.name || 'ficha.pdf';
+  }else{
+    showToast('Faça o upload de um PDF antes de visualizar a ficha.');
     return;
   }
-  if(pdfAttachmentState.attachment) openPdfForRecord(formData.id);
-  else showToast('Faça o upload de um PDF antes de visualizar a ficha.');
+  if(!url){ showToast('Não foi possível abrir o arquivo anexado.'); return; }
+  pdfPreviewState = {open:true, url, revoke, kind, name};
+  refreshPdfPreviewPanel();
 }
 function sanitizeFileName(name){
   return String(name || 'ficha.pdf').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(-100) || 'ficha.pdf';
@@ -6068,6 +6113,7 @@ async function saveRecord(){
     else records.push(formData);
     const ok = await upsertRecordRemote(formData);
     if(!ok) throw new Error('O registro não foi aceito pelo banco de dados.');
+    clearPdfPreview();
     pdfAttachmentState = {file:null, attachment:formData.pdfFicha || null, loading:false, error:''};
     showToast(formData.pdfFicha ? 'Registro e PDF salvos com sucesso. Use “Abrir PDF” na lista para confirmar o arquivo.' : 'Registro salvo com sucesso.');
     goTo('consulta');
