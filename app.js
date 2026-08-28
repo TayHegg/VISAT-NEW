@@ -3329,6 +3329,7 @@ function render(){
   if(view==='form'){
     bindFormEvents();
     applyPdfFieldVisuals();
+    if (typeof initVoiceDictation === 'function') initVoiceDictation();
   }
   if(view==='consulta') bindConsultaEvents();
   if(view==='analytics' || view==='analytics2025' || view==='analytics2024') bindAnalyticsEvents();
@@ -5475,6 +5476,12 @@ function renderForm(){
       <div class="step ${formPage===2?'active':''} ${!impl?'disabled':''}" onclick="${impl?'switchPage(2)':''}">2. Questionário Específico — ${esc(AGRAVOS[type]?.label||'')}</div>
     </div>
     <form id="mainForm">
+      <div class="voice-dictation-toolbar" aria-live="polite">
+        <button type="button" class="btn btn-ghost" id="voiceDictationBtn" aria-pressed="false">
+          <span aria-hidden="true">●</span> Ditado/Microfone
+        </button>
+        <span id="voiceDictationStatus" class="voice-dictation-status">Fale os campos e valores; por exemplo: “Nome do paciente: Patrícia de Almeida”.</span>
+      </div>
       ${formPage===1 ? renderPage1() : renderPage2(type)}
       <div class="form-actions no-print">
         <button type="button" class="btn btn-ghost" onclick="goTo('consulta')">Cancelar</button>
