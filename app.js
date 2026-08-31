@@ -3369,14 +3369,45 @@ function normalizeDuplicateDate(value){
   const raw = String(value || '').trim();
   return isoDateFromValue(raw) || raw;
 }
+function duplicateNameTokenSimilarity(a,b){
+  if(a === b) return 1;
+  if(!a || !b) return 0;
+  const previous = Array.from({length:b.length + 1},(_,i)=>i);
+  for(let i=1; i<=a.length; i++){
+    const current = [i];
+    for(let j=1; j<=b.length; j++){
+      current[j] = Math.min(
+        current[j-1] + 1,
+        previous[j] + 1,
+        previous[j-1] + (a[i-1] === b[j-1] ? 0 : 1)
+      );
+    }
+    for(let j=0; j<current.length; j++) previous[j] = current[j];
+  }
+  return 1 - (previous[b.length] / Math.max(a.length,b.length));
+}
+function duplicateNamesMatch(candidateName, recordName){
+  const candidate = normalizeDuplicateText(candidateName);
+  const record = normalizeDuplicateText(recordName);
+  if(!candidate || !record) return false;
+  if(candidate === record) return true;
+  const candidateTokens = candidate.split(' ').filter(token=>token.length >= 3);
+  const recordTokens = record.split(' ').filter(token=>token.length >= 3);
+  if(candidateTokens.length < 2 || recordTokens.length < 2) return false;
+  const lastTokenSimilarity = duplicateNameTokenSimilarity(candidateTokens.at(-1), recordTokens.at(-1));
+  if(lastTokenSimilarity < 0.72) return false;
+  const matchedTokens = candidateTokens.filter(token=>recordTokens.some(other=>duplicateNameTokenSimilarity(token, other) >= 0.72));
+  return matchedTokens.length >= Math.max(2, Math.ceil(candidateTokens.length * 0.75));
+}
 function duplicateComparisonFor(candidate, record){
   const fichaNumero = normalizeDuplicateText(candidate?.fichaNumero);
   const patientName = normalizeDuplicateText(candidate?.patientName);
   const dataNotificacao = normalizeDuplicateDate(candidate?.dataNotificacao);
+  const samePatientName = duplicateNamesMatch(candidate?.patientName, record?.patientName);
   return {
     byNumber: Boolean(fichaNumero && normalizeDuplicateText(record?.fichaNumero) === fichaNumero),
-    byPatientName: Boolean(patientName && normalizeDuplicateText(record?.patientName) === patientName),
-    byNameDate: Boolean(patientName && dataNotificacao && normalizeDuplicateText(record?.patientName) === patientName && normalizeDuplicateDate(record?.dataNotificacao) === dataNotificacao),
+    byPatientName: samePatientName,
+    byNameDate: Boolean(samePatientName && dataNotificacao && normalizeDuplicateDate(record?.dataNotificacao) === dataNotificacao),
   };
 }
 function isEditingExistingRecord(){

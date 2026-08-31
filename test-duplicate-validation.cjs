@@ -59,6 +59,7 @@ setRecords(testRecords);
 
 assert.equal(duplicateComparisonFor({ fichaNumero: '123' }, testRecords[0]).byNumber, true);
 assert.equal(duplicateComparisonFor({ patientName: 'JOAO DA SILVA', dataNotificacao: '31/08/2026' }, testRecords[0]).byNameDate, true);
+assert.equal(duplicateComparisonFor({ patientName: 'Cristine de Souza Belizário', dataNotificacao: '2026-05-18' }, { patientName: 'Cristiny de Souza Belizareie', dataNotificacao: '2026-05-18' }).byPatientName, true, 'Pequenas diferenças de grafia não deveriam esconder a ficha correspondente');
 
 setFormData({ id: 'new', fichaNumero: '123', patientName: '', dataNotificacao: '' });
 setEditingId(null);
