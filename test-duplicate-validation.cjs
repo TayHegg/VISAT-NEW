@@ -19,6 +19,12 @@ const isolated = `
     return match ? match[1] + '-' + String(match[2]).padStart(2,'0') + '-' + String(match[3]).padStart(2,'0') : '';
   }
   function fichaLabel(record){ return record.fichaNumero ? '#' + String(record.fichaNumero) : '—'; }
+  function yearFromRecord(record){
+    if(record && record.anoReferencia) return String(record.anoReferencia);
+    const sourceYear = String(record?.id || '').match(/^excel(20\\d{2})-/i);
+    return sourceYear ? sourceYear[1] : String(record?.dataNotificacao || '').slice(0,4);
+  }
+  function operationalRecords(){ return records.filter(record=>yearFromRecord(record) === '2026'); }
   let records = [];
   let editingId = null;
   let formData = {};
@@ -40,6 +46,7 @@ const { duplicateComparisonFor, findDuplicateRecords, setRecords, setEditingId, 
 const testRecords = [
   { id: 'r1', fichaNumero: '123', patientName: 'João da Silva', dataNotificacao: '2026-08-31' },
   { id: 'r2', fichaNumero: '456', patientName: 'Maria Souza', dataNotificacao: '2026-08-30' },
+  { id: 'excel2025-demo', fichaNumero: '508', patientName: 'Raphael WelttOn Moura', dataNotificacao: '2025-08-20', anoReferencia: 2025 },
 ];
 setRecords(testRecords);
 
@@ -49,6 +56,7 @@ assert.equal(duplicateComparisonFor({ patientName: 'JOAO DA SILVA', dataNotifica
 setFormData({ id: 'new', fichaNumero: '123', patientName: '', dataNotificacao: '' });
 setEditingId(null);
 assert.equal(findDuplicateRecords({ id: 'new', fichaNumero: '123', patientName: '', dataNotificacao: '' }, 'new').length, 1, 'Número já existente deveria ser detectado');
+assert.equal(findDuplicateRecords({ id: 'new', fichaNumero: '508', patientName: '', dataNotificacao: '' }, 'new').length, 0, 'Número existente apenas em ficha importada de 2025 não deve bloquear um novo registro de 2026');
 
 setFormData({ id: 'new', fichaNumero: '', patientName: 'JOAO DA SILVA', dataNotificacao: '31/08/2026' });
 const sameNameAndDate = findDuplicateRecords({ id: 'new', fichaNumero: '', patientName: 'JOAO DA SILVA', dataNotificacao: '31/08/2026' }, 'new');

@@ -3385,7 +3385,8 @@ function isEditingExistingRecord(){
 function findDuplicateRecords(candidate=formData, excludeId=editingId || candidate?.id){
   if(isEditingExistingRecord()) return [];
   const currentId = excludeId || candidate?.id || null;
-  return records.filter(record=>{
+  const duplicateSource = operationalRecords();
+  return duplicateSource.filter(record=>{
     if(!record || (currentId && record.id === currentId)) return false;
     const match = duplicateComparisonFor(candidate, record);
     return match.byNumber || match.byPatientName;
