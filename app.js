@@ -3401,7 +3401,7 @@ function duplicateMessageForField(fieldKey, matches){
     return `${ficha}${patient}`;
   }))];
   if(fieldKey === 'fichaNumero') return `DUPLICIDADE: o número da ficha já existe no sistema (${labels.join(', ')}).`;
-  const dateDetails = [...new Set(relevant.map(({record})=>`${fichaLabel(record)} — Data de Notificação: ${fmtDate(record.dataNotificacao)}`))];
+  const dateDetails = [...new Set(relevant.map(({record})=>`Nº da Ficha: ${fichaLabel(record).replace(/^#/, '')} — Nome do Paciente: ${record.patientName || 'Não informado'} — Data de Notificação: ${fmtDate(record.dataNotificacao)}`))];
   const hasSameNameAndDate = relevant.some(match=>match.byNameDate);
   if(hasSameNameAndDate) return `DUPLICIDADE: o Nome do Paciente + Data de Notificação já existem (${dateDetails.join('; ')}).`;
   return `ATENÇÃO: o nome do paciente já aparece em ${dateDetails.join('; ')}. A ficha só será considerada duplicada se a Data de Notificação também for igual.`;

@@ -19,6 +19,11 @@ const isolated = `
     return match ? match[1] + '-' + String(match[2]).padStart(2,'0') + '-' + String(match[3]).padStart(2,'0') : '';
   }
   function fichaLabel(record){ return record.fichaNumero ? '#' + String(record.fichaNumero) : '—'; }
+  function fmtDate(value){
+    const raw = String(value || '');
+    const match = raw.match(/^(\\d{4})-(\\d{2})-(\\d{2})$/);
+    return match ? match[3] + '/' + match[2] + '/' + match[1] : raw;
+  }
   function yearFromRecord(record){
     if(record && record.anoReferencia) return String(record.anoReferencia);
     const sourceYear = String(record?.id || '').match(/^excel(20\\d{2})-/i);
@@ -32,6 +37,7 @@ const isolated = `
   module.exports = {
     duplicateComparisonFor,
     findDuplicateRecords,
+    duplicateMessageForField,
     normalizeDuplicateDate,
     setRecords(value){ records = value; },
     setEditingId(value){ editingId = value; },
@@ -41,11 +47,12 @@ const isolated = `
 
 const moduleObject = { exports: {} };
 new Function('module', 'exports', isolated)(moduleObject, moduleObject.exports);
-const { duplicateComparisonFor, findDuplicateRecords, setRecords, setEditingId, setFormData } = moduleObject.exports;
+const { duplicateComparisonFor, findDuplicateRecords, duplicateMessageForField, setRecords, setEditingId, setFormData } = moduleObject.exports;
 
 const testRecords = [
   { id: 'r1', fichaNumero: '123', patientName: 'João da Silva', dataNotificacao: '2026-08-31' },
   { id: 'r2', fichaNumero: '456', patientName: 'Maria Souza', dataNotificacao: '2026-08-30' },
+  { id: 'r425', fichaNumero: '425', patientName: 'Cristine de Souza Belizário', dataNotificacao: '2026-06-10' },
   { id: 'excel2025-demo', fichaNumero: '508', patientName: 'Raphael WelttOn Moura', dataNotificacao: '2025-08-20', anoReferencia: 2025 },
 ];
 setRecords(testRecords);
@@ -67,6 +74,12 @@ const sameNameDifferentDate = findDuplicateRecords({ id: 'new', fichaNumero: '',
 assert.equal(sameNameDifferentDate.length, 1, 'Nome repetido com outra data deveria gerar aviso informativo');
 assert.equal(sameNameDifferentDate[0].byPatientName, true, 'O nome repetido deveria ser informado');
 assert.equal(sameNameDifferentDate[0].byNameDate, false, 'Data diferente não deveria bloquear o novo registro');
+
+const cristineMatches = findDuplicateRecords({ id: 'new', fichaNumero: '', patientName: 'Cristine de Souza Belizário', dataNotificacao: '2026-06-10' }, 'new');
+const cristineMessage = duplicateMessageForField('patientName', cristineMatches);
+assert.match(cristineMessage, /Nº da Ficha: 425/, 'O aviso deveria mostrar o número da ficha encontrada');
+assert.match(cristineMessage, /Nome do Paciente: Cristine de Souza Belizário/, 'O aviso deveria mostrar o nome encontrado');
+assert.match(cristineMessage, /Data de Notificação: 10\/06\/2026/, 'O aviso deveria mostrar a data formatada');
 
 setFormData({ id: 'r1', fichaNumero: '123', patientName: 'João da Silva', dataNotificacao: '2026-08-31' });
 setEditingId('r1');
