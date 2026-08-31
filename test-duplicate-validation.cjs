@@ -56,5 +56,6 @@ assert.equal(findDuplicateRecords({ id: 'new', fichaNumero: '', patientName: 'JO
 setFormData({ id: 'r1', fichaNumero: '123', patientName: 'João da Silva', dataNotificacao: '2026-08-31' });
 setEditingId('r1');
 assert.equal(findDuplicateRecords({ id: 'r1', fichaNumero: '123', patientName: 'João da Silva', dataNotificacao: '2026-08-31' }, 'r1').length, 0, 'O próprio registro em edição não pode ser considerado duplicado');
+assert.equal(findDuplicateRecords({ id: 'r1', fichaNumero: '456', patientName: 'Maria Souza', dataNotificacao: '2026-08-30' }, 'r1').length, 0, 'A edição de uma ficha existente não deve validar duplicidade');
 
 console.log('Validação de duplicidade: todos os cenários passaram.');

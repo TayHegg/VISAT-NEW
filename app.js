@@ -3378,7 +3378,11 @@ function duplicateComparisonFor(candidate, record){
     byNameDate: Boolean(patientName && dataNotificacao && normalizeDuplicateText(record?.patientName) === patientName && normalizeDuplicateDate(record?.dataNotificacao) === dataNotificacao),
   };
 }
+function isEditingExistingRecord(){
+  return Boolean(editingId && records.some(record=>record?.id === editingId));
+}
 function findDuplicateRecords(candidate=formData, excludeId=editingId || candidate?.id){
+  if(isEditingExistingRecord()) return [];
   const currentId = excludeId || candidate?.id || null;
   return records.filter(record=>{
     if(!record || (currentId && record.id === currentId)) return false;
@@ -6206,7 +6210,7 @@ function handleAutocomplete(input){
 async function saveRecord(){
   syncFormFromDOM();
   applyInvestigatorDefaults();
-  const duplicateMatches = refreshDuplicateValidation();
+  const duplicateMatches = isEditingExistingRecord() ? [] : refreshDuplicateValidation();
   if(duplicateMatches.length){
     showToast(duplicateToastMessage(duplicateMatches));
     return;
