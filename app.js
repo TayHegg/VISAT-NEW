@@ -2658,7 +2658,7 @@ let formData = {};
 let pdfAttachmentState = {file:null, attachment:null, loading:false, error:''};
 let pdfPreviewState = {open:false, url:'', revoke:false, kind:'application/pdf', name:''};
 let pdfAutoState = {active:false, processing:false, filled:[], unresolved:[], warnings:[], text:''};
-let tableState = { search:'', sortKey:'fichaNumero', sortDir:1, filterAgravo:'', filterStatus:'', filterSituacao:'', page:1, pageSize:10 };
+let tableState = { search:'', quickFicha:'', quickPatient:'', sortKey:'fichaNumero', sortDir:1, filterAgravo:'', filterStatus:'', filterSituacao:'', page:1, pageSize:10 };
 let dashFilters = { ano:'2026', periodoIni:'', periodoFim:'', mes:'', agravo:'', unidade:'', municipio:'', bairro:'', ocupacao:'', sexo:'', racaCor:'', escolaridade:'', tipoAcidente:'', status:'', obito:'' };
 let bmSelectedRegion = null;
 let pendingDeleteId = null;
@@ -4180,6 +4180,10 @@ function renderMiniTable(list){
 function getFilteredRecords(){
   let list = operationalRecords().slice();
   const s = tableState.search.trim().toLowerCase();
+  const fichaQuery = normalizeSearchText(tableState.quickFicha);
+  const patientQuery = normalizeSearchText(tableState.quickPatient);
+  if(fichaQuery) list = list.filter(r => normalizeSearchText(r.fichaNumero).includes(fichaQuery));
+  if(patientQuery) list = list.filter(r => normalizeSearchText(r.patientName).includes(patientQuery));
   if(s) list = list.filter(r => (r.patientName||'').toLowerCase().includes(s) || (r.municipioNotificacao||'').toLowerCase().includes(s) || (r.nomeEmpresa||'').toLowerCase().includes(s));
   if(tableState.filterAgravo) list = list.filter(r=> r.agravoType === tableState.filterAgravo);
   if(tableState.filterStatus) list = list.filter(r=> worstLevel(computeAlerts(r)) === tableState.filterStatus);
@@ -4208,6 +4212,18 @@ function renderConsulta(){
 
   return `
   <div class="panel">
+    <div class="consulta-quick-grid" aria-label="Consultas rápidas">
+      <div class="consulta-quick-box">
+        <label for="quickFichaSearch">Consulta por Nº de Ficha</label>
+        <input type="text" id="quickFichaSearch" placeholder="Digite o número da ficha" value="${esc(tableState.quickFicha)}" inputmode="numeric" autocomplete="off">
+        <span>Pesquise pelo número cadastrado.</span>
+      </div>
+      <div class="consulta-quick-box">
+        <label for="quickPatientSearch">Consulta por Nome do Paciente</label>
+        <input type="text" id="quickPatientSearch" placeholder="Digite o nome do paciente" value="${esc(tableState.quickPatient)}" autocomplete="off">
+        <span>Pesquise pelo nome completo ou parte dele.</span>
+      </div>
+    </div>
     <div class="toolbar">
       <div class="search-box">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -4342,6 +4358,10 @@ function changePage(p){ tableState.page = p; render(); }
 function bindConsultaEvents(){
   const si = document.getElementById('searchInput');
   if(si) si.addEventListener('input', e=>{ tableState.search=e.target.value; tableState.page=1; render(); si_focus(); });
+  const qf = document.getElementById('quickFichaSearch');
+  if(qf) qf.addEventListener('input', e=>{ tableState.quickFicha=e.target.value; tableState.page=1; render(); consultaInputFocus('quickFichaSearch'); });
+  const qp = document.getElementById('quickPatientSearch');
+  if(qp) qp.addEventListener('input', e=>{ tableState.quickPatient=e.target.value; tableState.page=1; render(); consultaInputFocus('quickPatientSearch'); });
   const fa = document.getElementById('filterAgravo');
   if(fa) fa.addEventListener('change', e=>{ tableState.filterAgravo=e.target.value; tableState.page=1; render(); });
   const fst = document.getElementById('filterSituacao');
@@ -4357,7 +4377,13 @@ function bindConsultaEvents(){
   });
 }
 function si_focus(){
-  requestAnimationFrame(()=>{ const el=document.getElementById('searchInput'); if(el){ el.focus(); el.selectionStart=el.selectionEnd=el.value.length; } });
+  consultaInputFocus('searchInput');
+}
+function consultaInputFocus(id){
+  requestAnimationFrame(()=>{
+    const el=document.getElementById(id);
+    if(el){ el.focus(); el.selectionStart=el.selectionEnd=el.value.length; }
+  });
 }
 /* ============================= EXPORTAÇÃO EXCEL (POR TIPO DE AGRAVO) ============================= */
 function labelOf(options, code){

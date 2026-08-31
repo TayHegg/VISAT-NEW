@@ -62,6 +62,12 @@ body{margin:0;font-family:var(--font-body);background:var(--bg);color:var(--text
 .dot.red{background:var(--red);} .dot.amber{background:var(--amber);} .dot.green{background:var(--green);}
 
 /* Table */
+.consulta-quick-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:16px;}
+.consulta-quick-box{display:flex;flex-direction:column;gap:5px;padding:12px 14px;border:1px solid rgba(46,111,176,.22);border-left:3px solid var(--primary);border-radius:9px;background:var(--surface-2);}
+.consulta-quick-box label{font-size:12px;font-weight:700;color:var(--primary-2);}
+.consulta-quick-box input{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;background:var(--surface);color:var(--text);}
+.consulta-quick-box input:focus{outline:2px solid rgba(46,111,176,.18);border-color:var(--primary);}
+.consulta-quick-box span{font-size:10.5px;color:var(--text-muted);}
 .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;}
 .search-box{position:relative;flex:1;min-width:220px;}
 .search-box input{width:100%;padding:9px 12px 9px 34px;border:1px solid var(--border);border-radius:8px;font-size:13.5px;font-family:var(--font-body);background:var(--surface-2);}
@@ -654,7 +660,7 @@ tr:hover td{background:var(--surface-2);}
 .controle-destino-chip{display:inline-flex;align-items:center;margin-top:6px;padding:4px 8px;border:2px solid #efa92b;border-radius:5px;background:#fff1d2;color:#875600;font:700 10px var(--font-body);line-height:1.1;white-space:nowrap;}
 .alert-card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .alert-card-head .controle-destino-chip{margin-top:0;}
-@media (max-width:980px){.controle-distribuicao-form{grid-template-columns:1fr 1fr;}.controle-distribuicao-numeros{grid-column:1 / -1;}.controle-distribuicao-submit{grid-column:1 / -1;}.controle-distribuicao-submit .btn{width:100%;justify-content:center;}}
+@media (max-width:980px){.consulta-quick-grid{grid-template-columns:1fr;}.controle-distribuicao-form{grid-template-columns:1fr 1fr;}.controle-distribuicao-numeros{grid-column:1 / -1;}.controle-distribuicao-submit{grid-column:1 / -1;}.controle-distribuicao-submit .btn{width:100%;justify-content:center;}}
 @media (max-width:640px){.controle-distribuicao-form{grid-template-columns:1fr;}.controle-distribuicao-numeros,.controle-distribuicao-submit{grid-column:auto;}.controle-distribuicao-mark{align-self:flex-start;}}
 .controle-modal{max-width:620px;}
 .controle-modal form{display:flex;flex-direction:column;gap:0;}
