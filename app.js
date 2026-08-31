@@ -3289,7 +3289,7 @@ function goTo(v, id){
     editingId = id || null;
     formPage = 1;
     const existing = id ? records.find(r=>r.id===id) : null;
-    formData = existing ? {...existing} : { id: uid(), agravoType:'grave', status:'aguardando_investigacao', createdAt: new Date().toISOString() };
+    formData = existing ? {...existing} : { id: uid(), agravoType:'grave', status:'aguardando_investigacao', anoReferencia: OPERATIONAL_YEAR, createdAt: new Date().toISOString() };
     applyInvestigatorDefaults();
     clearPdfPreview();
     pdfAttachmentState = {file:null, attachment:formData.pdfFicha || null, loading:false, error:''};
