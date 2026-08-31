@@ -51,7 +51,14 @@ setEditingId(null);
 assert.equal(findDuplicateRecords({ id: 'new', fichaNumero: '123', patientName: '', dataNotificacao: '' }, 'new').length, 1, 'Número já existente deveria ser detectado');
 
 setFormData({ id: 'new', fichaNumero: '', patientName: 'JOAO DA SILVA', dataNotificacao: '31/08/2026' });
-assert.equal(findDuplicateRecords({ id: 'new', fichaNumero: '', patientName: 'JOAO DA SILVA', dataNotificacao: '31/08/2026' }, 'new').length, 1, 'Nome + data já existentes deveriam ser detectados');
+const sameNameAndDate = findDuplicateRecords({ id: 'new', fichaNumero: '', patientName: 'JOAO DA SILVA', dataNotificacao: '31/08/2026' }, 'new');
+assert.equal(sameNameAndDate.length, 1, 'Nome + data já existentes deveriam ser detectados');
+assert.equal(sameNameAndDate[0].byNameDate, true, 'A mesma data deveria caracterizar duplicidade real');
+
+const sameNameDifferentDate = findDuplicateRecords({ id: 'new', fichaNumero: '', patientName: 'JOAO DA SILVA', dataNotificacao: '2026-09-01' }, 'new');
+assert.equal(sameNameDifferentDate.length, 1, 'Nome repetido com outra data deveria gerar aviso informativo');
+assert.equal(sameNameDifferentDate[0].byPatientName, true, 'O nome repetido deveria ser informado');
+assert.equal(sameNameDifferentDate[0].byNameDate, false, 'Data diferente não deveria bloquear o novo registro');
 
 setFormData({ id: 'r1', fichaNumero: '123', patientName: 'João da Silva', dataNotificacao: '2026-08-31' });
 setEditingId('r1');

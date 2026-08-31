@@ -3375,6 +3375,7 @@ function duplicateComparisonFor(candidate, record){
   const dataNotificacao = normalizeDuplicateDate(candidate?.dataNotificacao);
   return {
     byNumber: Boolean(fichaNumero && normalizeDuplicateText(record?.fichaNumero) === fichaNumero),
+    byPatientName: Boolean(patientName && normalizeDuplicateText(record?.patientName) === patientName),
     byNameDate: Boolean(patientName && dataNotificacao && normalizeDuplicateText(record?.patientName) === patientName && normalizeDuplicateDate(record?.dataNotificacao) === dataNotificacao),
   };
 }
@@ -3387,11 +3388,11 @@ function findDuplicateRecords(candidate=formData, excludeId=editingId || candida
   return records.filter(record=>{
     if(!record || (currentId && record.id === currentId)) return false;
     const match = duplicateComparisonFor(candidate, record);
-    return match.byNumber || match.byNameDate;
+    return match.byNumber || match.byPatientName;
   }).map(record=>({record, ...duplicateComparisonFor(candidate, record)}));
 }
 function duplicateMessageForField(fieldKey, matches){
-  const relevant = matches.filter(match=>fieldKey === 'fichaNumero' ? match.byNumber : match.byNameDate);
+  const relevant = matches.filter(match=>fieldKey === 'fichaNumero' ? match.byNumber : match.byPatientName);
   if(!relevant.length) return '';
   const labels = [...new Set(relevant.map(({record})=>{
     const ficha = record.fichaNumero ? fichaLabel(record) : 'registro sem número';
@@ -3399,7 +3400,10 @@ function duplicateMessageForField(fieldKey, matches){
     return `${ficha}${patient}`;
   }))];
   if(fieldKey === 'fichaNumero') return `DUPLICIDADE: o número da ficha já existe no sistema (${labels.join(', ')}).`;
-  return `DUPLICIDADE: já existe ficha com o mesmo Nome do Paciente + Data de Notificação (${labels.join(', ')}).`;
+  const dateDetails = [...new Set(relevant.map(({record})=>`${fichaLabel(record)} — Data de Notificação: ${fmtDate(record.dataNotificacao)}`))];
+  const hasSameNameAndDate = relevant.some(match=>match.byNameDate);
+  if(hasSameNameAndDate) return `DUPLICIDADE: o Nome do Paciente + Data de Notificação já existem (${dateDetails.join('; ')}).`;
+  return `ATENÇÃO: o nome do paciente já aparece em ${dateDetails.join('; ')}. A ficha só será considerada duplicada se a Data de Notificação também for igual.`;
 }
 function duplicateToastMessage(matches){
   const reasons = [];
@@ -3414,6 +3418,7 @@ function refreshDuplicateValidation(){
     const message = duplicateMessageForField(key, matches);
     messageEl.textContent = message;
     messageEl.classList.toggle('visible', Boolean(message));
+    messageEl.classList.toggle('warning', Boolean(message) && !matches.some(match=>key === 'fichaNumero' ? match.byNumber : match.byNameDate));
   });
   DUPLICATE_CHECK_FIELDS.forEach(key=>{
     const input = document.querySelector(`#mainForm [data-k="${key}"]`);
@@ -6211,7 +6216,7 @@ async function saveRecord(){
   syncFormFromDOM();
   applyInvestigatorDefaults();
   const duplicateMatches = isEditingExistingRecord() ? [] : refreshDuplicateValidation();
-  if(duplicateMatches.length){
+  if(duplicateMatches.some(match=>match.byNumber || match.byNameDate)){
     showToast(duplicateToastMessage(duplicateMatches));
     return;
   }
