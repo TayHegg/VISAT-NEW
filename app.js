@@ -3329,6 +3329,7 @@ function render(){
   if(view==='form'){
     bindFormEvents();
     applyPdfFieldVisuals();
+    refreshDuplicateValidation();
     if (typeof initVoiceDictation === 'function') initVoiceDictation();
   }
   if(view==='consulta') bindConsultaEvents();
@@ -3357,6 +3358,68 @@ function isMotoAccident(r){
   const cidText = [r.causaCID10].filter(Boolean).join(' ');
   const occupationText = normalizeSearchText(r.ocupacao);
   return MOTO_CID_RE.test(cidText) || MOTO_OCCUPATION_TERMS.some(term=>occupationText.includes(term));
+}
+const DUPLICATE_CHECK_FIELDS = ['fichaNumero','patientName','dataNotificacao'];
+const DUPLICATE_HINT_FIELDS = ['fichaNumero','patientName'];
+
+function normalizeDuplicateText(value){
+  return normalizeSearchText(value).replace(/\s+/g,' ').trim();
+}
+function normalizeDuplicateDate(value){
+  const raw = String(value || '').trim();
+  return isoDateFromValue(raw) || raw;
+}
+function duplicateComparisonFor(candidate, record){
+  const fichaNumero = normalizeDuplicateText(candidate?.fichaNumero);
+  const patientName = normalizeDuplicateText(candidate?.patientName);
+  const dataNotificacao = normalizeDuplicateDate(candidate?.dataNotificacao);
+  return {
+    byNumber: Boolean(fichaNumero && normalizeDuplicateText(record?.fichaNumero) === fichaNumero),
+    byNameDate: Boolean(patientName && dataNotificacao && normalizeDuplicateText(record?.patientName) === patientName && normalizeDuplicateDate(record?.dataNotificacao) === dataNotificacao),
+  };
+}
+function findDuplicateRecords(candidate=formData, excludeId=editingId || candidate?.id){
+  const currentId = excludeId || candidate?.id || null;
+  return records.filter(record=>{
+    if(!record || (currentId && record.id === currentId)) return false;
+    const match = duplicateComparisonFor(candidate, record);
+    return match.byNumber || match.byNameDate;
+  }).map(record=>({record, ...duplicateComparisonFor(candidate, record)}));
+}
+function duplicateMessageForField(fieldKey, matches){
+  const relevant = matches.filter(match=>fieldKey === 'fichaNumero' ? match.byNumber : match.byNameDate);
+  if(!relevant.length) return '';
+  const labels = [...new Set(relevant.map(({record})=>{
+    const ficha = record.fichaNumero ? fichaLabel(record) : 'registro sem número';
+    const patient = record.patientName ? ` — ${record.patientName}` : '';
+    return `${ficha}${patient}`;
+  }))];
+  if(fieldKey === 'fichaNumero') return `DUPLICIDADE: o número da ficha já existe no sistema (${labels.join(', ')}).`;
+  return `DUPLICIDADE: já existe ficha com o mesmo Nome do Paciente + Data de Notificação (${labels.join(', ')}).`;
+}
+function duplicateToastMessage(matches){
+  const reasons = [];
+  if(matches.some(match=>match.byNumber)) reasons.push('Nº da Ficha');
+  if(matches.some(match=>match.byNameDate)) reasons.push('Nome do Paciente + Data de Notificação');
+  return `Não foi possível salvar: duplicidade encontrada em ${reasons.join(' e ')}.`;
+}
+function refreshDuplicateValidation(){
+  const matches = findDuplicateRecords(formData, editingId || formData.id);
+  document.querySelectorAll('[data-duplicate-for]').forEach(messageEl=>{
+    const key = messageEl.dataset.duplicateFor;
+    const message = duplicateMessageForField(key, matches);
+    messageEl.textContent = message;
+    messageEl.classList.toggle('visible', Boolean(message));
+  });
+  DUPLICATE_CHECK_FIELDS.forEach(key=>{
+    const input = document.querySelector(`#mainForm [data-k="${key}"]`);
+    const fieldEl = input?.closest('.field');
+    if(fieldEl){
+      const duplicate = matches.some(match=>key === 'fichaNumero' ? match.byNumber : match.byNameDate);
+      fieldEl.classList.toggle('duplicate-field', duplicate);
+    }
+  });
+  return matches;
 }
 function distinctValues(field, source=records){
   return [...new Set(source.map(r=>r[field]).filter(v=>v!==undefined && v!==null && v!==''))].sort((a,b)=> String(a).localeCompare(String(b),'pt-BR'));
@@ -4504,6 +4567,7 @@ function field(opts){
   const {num, label, key, type='text', required=false, span='', options=null, hint='', readOnly=false} = opts;
   const val = formData[key] ?? '';
   const invalid = required && !val;
+  const duplicateHint = DUPLICATE_HINT_FIELDS.includes(key) ? `<span class="duplicate-hint" data-duplicate-for="${key}" aria-live="polite"></span>` : '';
   let input = '';
   if(type==='select'){
     input = `<select data-k="${key}" ${required?'required':''} ${readOnly?'disabled':''}>
@@ -4519,6 +4583,7 @@ function field(opts){
     <label>${num?`<span class="num">${num}.</span>`:''}${esc(label)} ${required?'<span class="req">*</span>':''}</label>
     ${input}
     ${hint?`<span class="hint">${esc(hint)}</span>`:''}
+    ${duplicateHint}
   </div>`;
 }
 function cepField(){
@@ -5950,8 +6015,15 @@ function bindFormEvents(){
       refreshPdfAutoSummary();
     }
   };
+  const handleDuplicateFieldChange = e=>{
+    const key = e.target.dataset.k;
+    if(!DUPLICATE_CHECK_FIELDS.includes(key)) return;
+    formData[key] = e.target.value;
+    refreshDuplicateValidation();
+  };
   form.addEventListener('input', e=>{
     handleManualFieldChange(e);
+    handleDuplicateFieldChange(e);
     if(e.target.dataset.k === 'dataNascimento'){
       formData.dataNascimento = e.target.value;
       const chip = document.getElementById('idadeChip');
@@ -5980,7 +6052,10 @@ function bindFormEvents(){
       handleAutocomplete(e.target);
     }
   });
-  form.addEventListener('change', handleManualFieldChange);
+  form.addEventListener('change', e=>{
+    handleManualFieldChange(e);
+    handleDuplicateFieldChange(e);
+  });
   const pdfInput = document.getElementById('pdfFichaInput');
   if(pdfInput) pdfInput.addEventListener('change', ()=>handlePdfInput(pdfInput));
   document.querySelectorAll('.ac-list').forEach(list=>{
@@ -6105,6 +6180,11 @@ function handleAutocomplete(input){
 async function saveRecord(){
   syncFormFromDOM();
   applyInvestigatorDefaults();
+  const duplicateMatches = refreshDuplicateValidation();
+  if(duplicateMatches.length){
+    showToast(duplicateToastMessage(duplicateMatches));
+    return;
+  }
   const idx = records.findIndex(r=>r.id===formData.id);
   const previousRecord = idx>=0 ? {...records[idx]} : null;
   const btn = document.getElementById('saveRecordBtn');

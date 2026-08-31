@@ -97,6 +97,9 @@ tr:hover td{background:var(--surface-2);}
 .field label .num{font-family:var(--font-mono);color:var(--text-muted);font-weight:500;margin-right:3px;}
 .field label .req{color:var(--red);}
 .field .hint{font-size:11px;color:var(--text-muted);}
+.duplicate-hint{display:none;font-size:11px;line-height:1.35;color:#8A2E29;font-weight:600;}
+.duplicate-hint.visible{display:block;}
+.field.duplicate-field input, .field.duplicate-field select{border-color:var(--red);background:var(--red-bg);}
 .field.invalid input, .field.invalid select{border-color:var(--red);background:var(--red-bg);}
 .checkbox-list{display:flex;flex-direction:column;gap:6px;}
 .checkbox-list label{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;}
