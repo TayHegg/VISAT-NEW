@@ -2669,6 +2669,36 @@ let controleFichas = [];
 let controleTab = 'todas';
 let controleBuscaNumero = '';
 let controleBuscaNome = '';
+let producaoMensal = [];
+let producaoView = 'departamento';
+let producaoMesFiltro = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+let producaoFormOwner = '';
+
+const PRODUCAO_RESPONSAVEIS = ['Julio Cesar','Luciane Manhães'];
+const PRODUCAO_SIA_SUS_CODES = [
+  ['03.01.02.004-3','Investigação epidemiológica do óbito por doenças, agravos ou acidentes de trabalho'],
+  ['01.02.02.004-3','Inspeção sanitária em saúde do trabalhador para avaliação de cumprimento de recomendações'],
+  ['03.01.02.005-1','Investigação da relação da doença ou agravo relacionado ao trabalho para fins epidemiológicos'],
+  ['01.02.02.005-1','Busca ativa de casos suspeitos de doenças ou agravos relacionados ao trabalho'],
+  ['03.01.08.040-2','Apoio matricial em saúde do trabalhador na atenção primária à saúde'],
+  ['03.01.08.041-0','Apoio matricial em saúde do trabalhador na atenção especializada, urgência e emergência'],
+  ['03.01.08.042-9','Apoio matricial em vigilância à saúde do trabalhador (VISAT) para outros componentes da vigilância em saúde'],
+  ['01.02.02.006-0','Apoio institucional de vigilância em saúde do trabalhador (VISAT) para a rede de atenção à saúde'],
+  ['01.02.02.007-8','Atividades com grupos na temática de saúde do trabalhador'],
+  ['01.01.01.011-7','Atividade de educação permanente em saúde do trabalhador'],
+  ['01.02.02.008-6','Inspeção sanitária em saúde do trabalhador para mapeamento de riscos ocupacionais'],
+  ['01.02.02.009-4','Inspeção sanitária em saúde do trabalhador para investigação de acidente de trabalho'],
+  ['01.02.02.010-8','Inspeção sanitária em saúde do trabalhador para subsidiar estabelecimento da relação entre doenças e agravos com o trabalho'],
+  ['01.02.02.011-6','Inspeção sanitária em saúde do trabalhador para investigação de surtos/eventos inusitados relacionados ao trabalho'],
+  ['01.02.02.012-4','Ações de articulação com controle social e representantes de trabalhadores'],
+  ['01.02.02.013-2','Ações inter e intrassetoriais de saúde do trabalhador'],
+  ['01.02.02.014-0','Vigilância em saúde do trabalhador nas emergências em saúde pública'],
+  ['01.01.03.001-0','Visita domiciliar por profissional de nível médio'],
+  ['01.02.01.023-4','Recebimento de denúncias/reclamações'],
+  ['01.02.02.001-9','Vigilância da situação de saúde dos trabalhadores'],
+  ['01.02.02.002-7','Atividade de educação em saúde do trabalhador'],
+  ['01.02.02.003-5','Inspeção sanitária em saúde do trabalhador'],
+];
 
 /* ============================= SUPABASE ============================= */
 const SUPABASE_URL = 'https://rjcjvxxmfvasymcncrge.supabase.co';
@@ -2697,10 +2727,13 @@ async function loadRecords(){
     }
     const loaded = allRows.map(row => row.data).filter(Boolean);
     controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
-    records = loaded.filter(row => !isControleFichaRecord(row));
+    producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
+    records = loaded.filter(row => !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
   }catch(e){
     console.error('Falha ao carregar registros do Supabase', e);
     records = [];
+    controleFichas = [];
+    producaoMensal = [];
     showToast('Não foi possível conectar ao banco de dados.');
   }
 }
@@ -2728,8 +2761,156 @@ async function deleteRecordRemote(id){
     return false;
   }
 }
+async function upsertProducaoRemote(item){
+  try{
+    if(!supabaseClient) return false;
+    const payload = {...normalizeProducaoRecord(item), producaoMensal:true, storageId:producaoStorageId(item), updatedAt:new Date().toISOString()};
+    const {error} = await supabaseClient.from('records').upsert({
+      id: payload.storageId,
+      data: payload,
+      updated_at: payload.updatedAt,
+    }, {onConflict:'id'});
+    if(error) throw error;
+    return true;
+  }catch(error){
+    console.error('Falha ao salvar produção mensal no Supabase', error);
+    return false;
+  }
+}
+async function deleteProducaoRemote(item){
+  return deleteRecordRemote(producaoStorageId(item));
+}
 
 
+
+/* ============================= PRODUÇÃO MENSAL ============================= */
+function producaoMonth(value){ return String(value || '').slice(0,7); }
+function producaoCodes(item){
+  const raw = Array.isArray(item?.codigoSiaSus) ? item.codigoSiaSus : String(item?.codigoSiaSus || '').split(/[,;\n]+/);
+  return raw.map(code=>String(code).trim()).filter(Boolean);
+}
+function producaoCodeLabel(code){
+  const found = PRODUCAO_SIA_SUS_CODES.find(([value])=>value===code);
+  return found ? `${found[0]} — ${found[1]}` : code || 'Sem código informado';
+}
+function producaoDescription(code){ return PRODUCAO_SIA_SUS_CODES.find(([value])=>value===code)?.[1] || ''; }
+function producaoTotal(items){ return items.reduce((sum,item)=>sum + Math.max(1,Number(item.quantidade)||1),0); }
+function producaoFilteredItems(owner=''){
+  return producaoMensal
+    .filter(item=>producaoMonth(item.data) === producaoMonth(producaoMesFiltro))
+    .filter(item=>!owner || item.responsavel === owner)
+    .sort((a,b)=>String(b.data||'').localeCompare(String(a.data||'')) || String(a.razaoSocial||'').localeCompare(String(b.razaoSocial||''),'pt-BR'));
+}
+function producaoSummaryByCode(items){
+  const groups = {};
+  items.forEach(item=>{
+    const quantity = Math.max(1,Number(item.quantidade)||1);
+    const codes = producaoCodes(item);
+    if(!codes.length) groups['Sem código informado'] = (groups['Sem código informado'] || 0) + quantity;
+    else codes.forEach(code=>{ groups[code] = (groups[code] || 0) + quantity; });
+  });
+  return Object.entries(groups).sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0],'pt-BR'));
+}
+function openProducaoForm(owner=''){
+  producaoFormOwner = owner || '';
+  goTo('producaoNova');
+}
+function setProducaoMesFiltro(value){
+  producaoMesFiltro = value || producaoMesFiltro;
+  render();
+}
+function setProducaoView(viewName){
+  if(viewName==='julio') goTo('producaoJulio');
+  else if(viewName==='luciane') goTo('producaoLuciane');
+  else goTo('producaoDepartamento');
+}
+function renderProducaoForm(){
+  const today = todayISO();
+  const ownerOptions = PRODUCAO_RESPONSAVEIS.map(owner=>`<option value="${esc(owner)}" ${owner===producaoFormOwner?'selected':''}>${esc(owner)}</option>`).join('');
+  const codeOptions = PRODUCAO_SIA_SUS_CODES.map(([code,description])=>`<option value="${esc(code)}">${esc(code)} — ${esc(description)}</option>`).join('');
+  return `<div class="panel producao-form-panel">
+    <div class="producao-form-header"><div><div class="eyebrow">Mapa diário de produção — VISAT</div><h2>Nova Produção</h2><p class="hint">Registre uma atividade realizada. O lançamento será somado automaticamente à produção do responsável e ao total do Departamento.</p></div><button class="btn btn-ghost" type="button" onclick="goTo('producaoDepartamento')">Voltar para produção</button></div>
+    <form id="producaoForm" onsubmit="submitProducao(event)">
+      <div class="form-section"><div class="sec-title">Identificação do lançamento</div><div class="field-grid">
+        <div class="field"><label for="producaoData">Data <span class="req">*</span></label><input id="producaoData" name="data" type="date" value="${today}" required></div>
+        <div class="field"><label for="producaoResponsavel">Responsável <span class="req">*</span></label><select id="producaoResponsavel" name="responsavel" required><option value="">Selecione</option>${ownerOptions}</select><div class="hint">Julio Cesar e Luciane Manhães registram suas próprias produções.</div></div>
+        <div class="field"><label for="producaoQuantidade">Quantidade <span class="req">*</span></label><input id="producaoQuantidade" name="quantidade" type="number" min="1" step="1" value="1" required></div>
+        <div class="field"><label for="producaoProcesso">Processo / Protocolo</label><input id="producaoProcesso" name="processoProtocolo" type="text" placeholder="Número do processo ou protocolo"></div>
+      </div></div>
+      <div class="form-section"><div class="sec-title">Dados da atividade</div><div class="field-grid">
+        <div class="field span2"><label for="producaoRazaoSocial">Razão Social</label><input id="producaoRazaoSocial" name="razaoSocial" type="text" placeholder="Empresa ou instituição"></div>
+        <div class="field span2"><label for="producaoEndereco">Endereço</label><input id="producaoEndereco" name="endereco" type="text" placeholder="Endereço da atividade"></div>
+        <div class="field span2"><label for="producaoAtividade">Atividade realizada <span class="req">*</span></label><input id="producaoAtividade" name="atividade" type="text" placeholder="Descreva a atividade realizada" required></div>
+        <div class="field span2"><label for="producaoCodigo">Código(s) SIA/SUS</label><input id="producaoCodigo" name="codigoSiaSus" type="text" list="producaoCodigos" placeholder="Digite ou selecione um código; se houver mais de um, separe por vírgula"><datalist id="producaoCodigos">${codeOptions}</datalist><div class="hint">Os códigos e significados estão disponíveis no mapa de produção recebido.</div><details class="producao-code-reference"><summary>Consultar códigos e significados</summary><div>${PRODUCAO_SIA_SUS_CODES.map(([code,description])=>`<div><b>${esc(code)}</b><span>${esc(description)}</span></div>`).join('')}</div></details></div>
+        <div class="field"><label for="producaoAutos">Autos / Situação</label><input id="producaoAutos" name="autosSituacao" type="text" placeholder="Número do auto ou situação"></div>
+        <div class="field"><label for="producaoOrdem">Ordem de Fiscalização</label><input id="producaoOrdem" name="ordemFiscalizacao" type="text" placeholder="Ordem de fiscalização"></div>
+        <div class="field"><label for="producaoChefias">Chefias</label><input id="producaoChefias" name="chefias" type="text" placeholder="Chefias envolvidas"></div>
+      </div></div>
+      <div class="form-actions producao-form-actions"><button class="btn btn-ghost" type="button" onclick="goTo('producaoDepartamento')">Cancelar</button><button class="btn btn-primary" type="submit">Salvar produção</button></div>
+    </form>
+  </div>`;
+}
+function renderProducaoMensal(owner=''){
+  const items = producaoFilteredItems(owner);
+  const allMonthItems = producaoFilteredItems();
+  const julioTotal = producaoTotal(allMonthItems.filter(item=>item.responsavel==='Julio Cesar'));
+  const lucianeTotal = producaoTotal(allMonthItems.filter(item=>item.responsavel==='Luciane Manhães'));
+  const departmentTotal = julioTotal + lucianeTotal;
+  const codeSummary = producaoSummaryByCode(items);
+  const monthLabel = producaoMesFiltro ? producaoMesFiltro.split('-').reverse().join('/') : 'mês selecionado';
+  const scopeLabel = owner ? `Produção de ${owner}` : 'Produção do Departamento de Vigilância e Saúde do Trabalhador';
+  const activeView = owner === 'Julio Cesar' ? 'julio' : owner === 'Luciane Manhães' ? 'luciane' : 'departamento';
+  return `<div class="producao-page">
+    <div class="producao-page-header"><div><div class="eyebrow">Produção Mensal · ${esc(monthLabel)}</div><h2>${esc(scopeLabel)}</h2><p class="hint">Os lançamentos de Julio Cesar e Luciane Manhães são somados no total do Departamento.</p></div><button class="btn btn-primary" onclick="openProducaoForm('${esc(owner)}')"><span style="font-size:18px;line-height:0">+</span> Nova Produção</button></div>
+    <div class="producao-view-tabs"><button class="producao-view-tab ${activeView==='departamento'?'active':''}" onclick="setProducaoView('departamento')">Departamento</button><button class="producao-view-tab ${activeView==='julio'?'active':''}" onclick="setProducaoView('julio')">Julio Cesar</button><button class="producao-view-tab ${activeView==='luciane'?'active':''}" onclick="setProducaoView('luciane')">Luciane Manhães</button></div>
+    <div class="panel producao-filter-panel"><div class="field"><label for="producaoMesFiltro">Mês de referência</label><input id="producaoMesFiltro" type="month" value="${esc(producaoMesFiltro)}" onchange="setProducaoMesFiltro(this.value)"></div><div class="hint">A produção é contabilizada pela data do lançamento.</div></div>
+    <div class="grid-stats producao-stats"><div class="stat-card primary"><div class="n">${departmentTotal}</div><div class="l">Total do Departamento</div><div class="stat-sub">Vigilância e Saúde do Trabalhador</div></div><div class="stat-card amber"><div class="n">${julioTotal}</div><div class="l">Julio Cesar</div></div><div class="stat-card green"><div class="n">${lucianeTotal}</div><div class="l">Luciane Manhães</div></div></div>
+    <div class="panel"><div class="producao-section-heading"><div><h2>${esc(scopeLabel)} — ${esc(monthLabel)}</h2><div class="hint">${items.length} lançamento(s) · ${producaoTotal(items)} unidade(s) contabilizada(s).</div></div></div>${items.length ? `<div class="table-scroll"><table class="producao-table"><thead><tr><th>Data</th><th>Responsável</th><th>Processo / Protocolo</th><th>Razão Social</th><th>Atividade</th><th>Código(s) SIA/SUS</th><th>Qtd.</th><th>Autos / Situação</th><th>Ações</th></tr></thead><tbody>${items.map(item=>renderProducaoRow(item)).join('')}</tbody></table></div>` : `<div class="empty-state"><div style="font-size:38px;color:var(--border);margin-bottom:8px">—</div><b>Nenhuma produção lançada neste mês</b><div style="margin-top:5px">Use “Nova Produção” para registrar uma atividade.</div></div>`}</div>
+    <div class="panel"><div class="producao-section-heading"><div><h2>Resumo por código SIA/SUS</h2><div class="hint">Contagem dos lançamentos da visão atual.</div></div></div>${codeSummary.length ? `<div class="producao-code-summary">${codeSummary.map(([code,total])=>`<div class="producao-code-row"><div><b>${esc(code)}</b><span>${esc(producaoDescription(code) || 'Código informado no lançamento')}</span></div><strong>${total}</strong></div>`).join('')}</div>` : `<div class="empty-state compact">Nenhum código contabilizado neste mês.</div>`}</div>
+  </div>`;
+}
+function renderProducaoRow(item){
+  const codes = producaoCodes(item);
+  const operationalDetails = [item.autosSituacao ? `Autos/Situação: ${item.autosSituacao}` : '', item.ordemFiscalizacao ? `Ordem: ${item.ordemFiscalizacao}` : '', item.chefias ? `Chefias: ${item.chefias}` : ''].filter(Boolean);
+  return `<tr><td>${esc(fmtDate(item.data))}</td><td><b>${esc(item.responsavel)}</b></td><td>${esc(item.processoProtocolo || '—')}</td><td>${esc(item.razaoSocial || '—')}</td><td><span class="producao-activity">${esc(item.atividade || '—')}</span>${item.endereco ? `<small>${esc(item.endereco)}</small>` : ''}</td><td>${codes.length ? codes.map(code=>`<span class="producao-code-chip" title="${esc(producaoDescription(code) || 'Código informado')}">${esc(code)}</span>`) .join(' ') : '—'}</td><td><b class="producao-quantity">${Math.max(1,Number(item.quantidade)||1)}</b></td><td>${operationalDetails.length ? operationalDetails.map(detail=>`<small>${esc(detail)}</small>`).join('') : '—'}</td><td><button class="btn btn-ghost btn-sm" onclick="askDeleteProducao('${esc(item.id)}')">Excluir</button></td></tr>`;
+}
+function askDeleteProducao(id){
+  const item = producaoMensal.find(entry=>entry.id===id);
+  if(!item) return;
+  const message = `Excluir a produção de ${item.responsavel} em ${fmtDate(item.data)}?`;
+  if(!window.confirm(message)) return;
+  producaoMensal = producaoMensal.filter(entry=>entry.id!==id);
+  render();
+  deleteProducaoRemote(item).then(ok=>{ if(ok) showToast('Produção excluída.'); else showToast('Não foi possível excluir a produção do banco de dados.'); });
+}
+async function submitProducao(event){
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  const item = normalizeProducaoRecord({
+    id: uid(),
+    producaoMensal:true,
+    data:String(data.get('data') || todayISO()),
+    responsavel:String(data.get('responsavel') || '').trim(),
+    quantidade:Number(data.get('quantidade') || 1),
+    processoProtocolo:String(data.get('processoProtocolo') || '').trim(),
+    razaoSocial:String(data.get('razaoSocial') || '').trim(),
+    endereco:String(data.get('endereco') || '').trim(),
+    atividade:String(data.get('atividade') || '').trim(),
+    codigoSiaSus:String(data.get('codigoSiaSus') || '').split(/[,;\n]+/).map(code=>code.trim()).filter(Boolean),
+    autosSituacao:String(data.get('autosSituacao') || '').trim(),
+    ordemFiscalizacao:String(data.get('ordemFiscalizacao') || '').trim(),
+    chefias:String(data.get('chefias') || '').trim(),
+    createdAt:new Date().toISOString(),
+  });
+  if(!item.responsavel || !item.atividade){ showToast('Informe o responsável e a atividade realizada.'); return; }
+  const button = form.querySelector('button[type="submit"]');
+  if(button){ button.disabled = true; button.textContent = 'Salvando...'; }
+  producaoMensal.push(item);
+  const ok = await upsertProducaoRemote(item);
+  if(ok){ producaoFormOwner = item.responsavel; showToast('Produção registrada com sucesso.'); goTo(item.responsavel==='Julio Cesar'?'producaoJulio':'producaoLuciane'); }
+  else { producaoMensal = producaoMensal.filter(entry=>entry.id!==item.id); if(button){button.disabled=false;button.textContent='Salvar produção';} render(); showToast('Não foi possível salvar a produção no banco de dados.'); }
+}
 
 /* ============================= CONTROLE DE FICHAS ============================= */
 const CONTROLE_FICHA_STATUS = {
@@ -2751,6 +2932,19 @@ function normalizeControleFicha(value){
 function isControleFichaRecord(r){
   return Boolean(r && (r.controleFicha === true || String(r.id || '').startsWith('cf-')));
 }
+function isProducaoMensalRecord(r){
+  return Boolean(r && (r.producaoMensal === true || String(r.id || '').startsWith('producao-')));
+}
+function normalizeProducaoRecord(r){
+  const item = {...r, producaoMensal:true};
+  if(!item.id) item.id = uid();
+  item.quantidade = Math.max(1, Number(item.quantidade) || 1);
+  item.data = String(item.data || '').trim();
+  item.responsavel = PRODUCAO_RESPONSAVEIS.includes(item.responsavel) ? item.responsavel : '';
+  item.codigoSiaSus = String(item.codigoSiaSus || '').trim();
+  return item;
+}
+function producaoStorageId(item){ return item.storageId || `producao-${item.id}`; }
 function normalizeControleFichaRecord(r){
   const item = {...r, controleFicha:true};
   if(!item.id) item.id = `cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`;
@@ -3100,6 +3294,11 @@ const APP_SHELL_HTML = `
     <div class="nav-item" data-view="consulta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Consulta de Fichas</div>
     <div class="nav-item" data-view="controleFichas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>Controle de Fichas</div>
     <div class="nav-item" data-view="form"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Novo Registro</div>
+    <div class="nav-group-title">Produção Mensal</div>
+    <div class="nav-item nav-subitem" data-view="producaoNova"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Nova Produção</div>
+    <div class="nav-item nav-subitem" data-view="producaoDepartamento"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>Departamento VISAT</div>
+    <div class="nav-item nav-subitem" data-view="producaoJulio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3"/><path d="M5 20c.7-3.2 3.1-5 7-5s6.3 1.8 7 5"/></svg>Julio Cesar</div>
+    <div class="nav-item nav-subitem" data-view="producaoLuciane"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3"/><path d="M5 20c.7-3.2 3.1-5 7-5s6.3 1.8 7 5"/></svg>Luciane Manhães</div>
     <div class="nav-group-title">Anos anteriores</div>
     <div class="nav-item nav-subitem" data-view="analytics2025"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>Dashboard 2025</div>
     <div class="nav-item nav-subitem" data-view="analytics2024"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>Dashboard 2024</div>
@@ -3229,7 +3428,10 @@ async function handleLogout(){
 
 function bindNavEvents(){
   document.querySelectorAll('.nav-item').forEach(el=>{
-    el.addEventListener('click', ()=> goTo(el.dataset.view));
+    el.addEventListener('click', ()=>{
+      if(el.dataset.view === 'producaoNova') producaoFormOwner = '';
+      goTo(el.dataset.view);
+    });
   });
   const logoutBtn = document.getElementById('logoutBtn');
   if(logoutBtn) logoutBtn.addEventListener('click', handleLogout);
@@ -3344,6 +3546,9 @@ function showToast(msg){
 /* ============================= NAVEGAÇÃO ============================= */
 function goTo(v, id){
   view = v;
+  if(v==='producaoDepartamento') producaoView = 'departamento';
+  else if(v==='producaoJulio') producaoView = 'julio';
+  else if(v==='producaoLuciane') producaoView = 'luciane';
   if(v==='analytics2025' || v==='analytics2024') analyticsCardFilter = null;
   if(v==='form'){
     editingId = id || null;
@@ -3371,6 +3576,10 @@ function render(){
     comparison:['Comparativo anual','Comparação dos indicadores por ano'],
     consulta:['Consulta de Fichas','Buscar, filtrar e gerenciar notificações registradas — 2026'],
     controleFichas:['Controle de Fichas','Fluxo de recebimento, atribuição e devolução — Epidemiologia / VISAT'],
+    producaoDepartamento:['Produção Mensal','Totalização do Departamento de Vigilância e Saúde do Trabalhador'],
+    producaoJulio:['Produção Mensal — Julio Cesar','Lançamentos individuais de produção'],
+    producaoLuciane:['Produção Mensal — Luciane Manhães','Lançamentos individuais de produção'],
+    producaoNova:['Nova Produção','Mapa diário de produção — VISAT'],
     form:[editingId? 'Editar Registro':'Novo Registro','Ficha de Investigação — Acidente de Trabalho'],
     print:['Visualizar / Imprimir','Ficha de Investigação — Acidente de Trabalho'],
   };
@@ -3384,6 +3593,10 @@ function render(){
   else if(view==='comparison') c.innerHTML = renderAnnualComparison();
   else if(view==='consulta') c.innerHTML = renderConsulta();
   else if(view==='controleFichas') c.innerHTML = renderControleFichas();
+  else if(view==='producaoDepartamento') c.innerHTML = renderProducaoMensal();
+  else if(view==='producaoJulio') c.innerHTML = renderProducaoMensal('Julio Cesar');
+  else if(view==='producaoLuciane') c.innerHTML = renderProducaoMensal('Luciane Manhães');
+  else if(view==='producaoNova') c.innerHTML = renderProducaoForm();
   else if(view==='form') c.innerHTML = renderForm();
   else if(view==='print') c.innerHTML = renderPrint(editingId);
   if(view==='form'){
