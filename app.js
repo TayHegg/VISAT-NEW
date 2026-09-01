@@ -2667,6 +2667,8 @@ let analyticsCardFilter = null;
 
 let controleFichas = [];
 let controleTab = 'todas';
+let controleBuscaNumero = '';
+let controleBuscaNome = '';
 
 /* ============================= SUPABASE ============================= */
 const SUPABASE_URL = 'https://rjcjvxxmfvasymcncrge.supabase.co';
@@ -2733,7 +2735,7 @@ async function deleteRecordRemote(id){
 const CONTROLE_FICHA_STATUS = {
   departamento_visat: {label:'Departamento VISAT'},
   com_enfermeiro: {label:'Com enfermeiro'},
-  devolvida: {label:'Devolvida à Epidemio'},
+  devolvida: {label:'Finalizada — Epidemiologia'},
 };
 const CONTROLE_FICHA_NURSES = ['Julio Cesar','Luciane Manhães','Neves Cunha'];
 const CONTROLE_FICHA_DESTINATIONS = ['Departamento VISAT','Julio Cesar','Luciane Manhães','Neves Cunha','Epidemiologia'];
@@ -2783,6 +2785,29 @@ function controleFichaTabMatches(item, tab){
   return true;
 }
 function controleFichaCount(tab){ return controleFichas.filter(item => controleFichaTabMatches(item, tab)).length; }
+function controleFichaPatientName(item){
+  const linked = findLinkedRecord(item?.numeroFicha);
+  return linked?.patientName || item?.patientName || item?.nomePaciente || '';
+}
+function controleFichaIsOverdue(item){
+  return item?.status !== 'devolvida' && controleFichaDays(item) > 15;
+}
+function controleFichaResponsibleLabel(item){
+  if(item?.status === 'departamento_visat') return 'Departamento VISAT';
+  if(item?.status === 'devolvida') return 'Epidemiologia (finalizadas)';
+  return item?.enfermeiroResponsavel || 'Sem responsável';
+}
+function renderControlePrazoAlert(){
+  const overdue = controleFichas.filter(controleFichaIsOverdue);
+  if(!overdue.length) return '<div class="controle-prazo-alert controle-prazo-ok"><b>Prazo em dia</b><span>Nenhuma ficha em aberto está há mais de 15 dias com o responsável.</span><small>Fichas na Epidemiologia são consideradas finalizadas e não entram neste alerta.</small></div>';
+  const byResponsible = overdue.reduce((groups,item)=>{
+    const key = controleFichaResponsibleLabel(item);
+    groups[key] = (groups[key] || 0) + 1;
+    return groups;
+  },{});
+  const summary = Object.entries(byResponsible).map(([responsible,count])=>`<span><b>${count}</b> com ${esc(responsible)}</span>`).join('');
+  return `<div class="controle-prazo-alert controle-prazo-warning"><div><b>Alerta de prazo</b><span>${overdue.length} ficha(s) em aberto há mais de 15 dias.</span></div><div class="controle-prazo-summary">${summary}</div><small>Fichas na Epidemiologia são consideradas finalizadas e não entram neste alerta.</small></div>`;
+}
 function findControleFichaByNumero(numero){
   const key = normalizeControleFicha(numero);
   if(!key) return null;
@@ -2831,11 +2856,18 @@ function renderControleFichas(){
     ['julio_cesar','Julio Cesar'],
     ['luciane_manhaes','Luciane Manhães'],
     ['neves_cunha','Neves Cunha'],
-    ['devolvida','Devolvidas à Epidemio'],
+    ['devolvida','Epidemiologia (finalizadas)'],
   ];
   const currentTab = tabs.some(([key])=>key===controleTab) ? controleTab : 'todas';
+  const numeroQuery = normalizeSearchText(controleBuscaNumero).trim();
+  const nomeQuery = normalizeSearchText(controleBuscaNome).trim();
   const list = controleFichas
     .filter(item=>controleFichaTabMatches(item,currentTab))
+    .filter(item=>{
+      const numero = normalizeSearchText(item.numeroFicha);
+      const nome = normalizeSearchText(controleFichaPatientName(item));
+      return (!numeroQuery || numero.includes(numeroQuery)) && (!nomeQuery || nome.includes(nomeQuery));
+    })
     .sort((a,b)=>String(controleFichaStatusDate(b)||'').localeCompare(String(controleFichaStatusDate(a)||'')) || String(a.numeroFicha||'').localeCompare(String(b.numeroFicha||''),'pt-BR'));
   const statCards = tabs.map(([key,label])=>`<div class="stat-card ${key==='devolvida'?'green':key==='todas'?'primary':'amber'} controle-stat-card" onclick="setControleTab('${key}')"><div class="n">${controleFichaCount(key)}</div><div class="l">${esc(label)}</div></div>`).join('');
   return `
@@ -2849,6 +2881,14 @@ function renderControleFichas(){
         ${tabs.map(([key,label])=>`<button class="controle-tab ${currentTab===key?'active':''}" onclick="setControleTab('${key}')">${esc(label)} <span>${controleFichaCount(key)}</span></button>`).join('')}
       </div>
     </div>
+    <div class="panel controle-pesquisa-panel">
+      <div class="controle-heading"><div><h2>Consultar fichas no fluxo</h2><div class="hint">Pesquise para saber rapidamente com quem cada ficha está.</div></div></div>
+      <div class="controle-pesquisa-grid">
+        <div class="field"><label for="controleBuscaNumero">Consulta por Nº de Ficha</label><input type="text" id="controleBuscaNumero" value="${esc(controleBuscaNumero)}" placeholder="Digite o número da ficha" inputmode="numeric" autocomplete="off"></div>
+        <div class="field"><label for="controleBuscaNome">Consulta por Nome do Paciente</label><input type="text" id="controleBuscaNome" value="${esc(controleBuscaNome)}" placeholder="Digite o nome do paciente" autocomplete="off"></div>
+      </div>
+    </div>
+    ${renderControlePrazoAlert()}
     <div class="panel controle-distribuicao-panel">
       <div class="controle-heading">
         <div><h2>Distribuição de Fichas</h2><div class="hint">Informe vários números separados por vírgula e escolha para onde as fichas foram distribuídas.</div></div>
@@ -2862,13 +2902,14 @@ function renderControleFichas(){
       </form>
     </div>
     <div class="panel">
-      <div class="toolbar"><div><h2 style="margin-bottom:3px">${esc(tabs.find(([key])=>key===currentTab)?.[1] || 'Fichas')}</h2><div class="hint">${list.length} ficha(s) nesta visão.</div></div></div>
+      <div class="toolbar"><div><h2 style="margin-bottom:3px">${esc(tabs.find(([key])=>key===currentTab)?.[1] || 'Fichas')}</h2><div class="hint">${list.length} ficha(s) ${numeroQuery || nomeQuery ? 'encontrada(s) na pesquisa.' : 'nesta visão.'}</div></div></div>
       ${list.length ? `<div class="table-scroll"><table class="controle-table"><thead><tr><th>Nº da ficha</th><th>Dados básicos</th><th>Entrada no status atual</th><th>Dias no status</th><th>Responsável</th><th>Ações</th></tr></thead><tbody>${list.map(item=>renderControleFichaRow(item)).join('')}</tbody></table></div>` : `<div class="empty-state"><div style="font-size:38px;color:var(--border);margin-bottom:8px">—</div><b>Nenhuma ficha nesta aba</b><div style="margin-top:5px">Use “Nova Entrada” para registrar uma ficha recebida da Epidemiologia.</div></div>`}
     </div>`;
 }
 function renderControleFichaRow(item){
   const statusLabel = CONTROLE_FICHA_STATUS[item.status]?.label || item.status || '—';
-  const nurse = item.enfermeiroResponsavel || '—';
+  const responsible = controleFichaResponsibleLabel(item);
+  const overdue = controleFichaIsOverdue(item);
   const primaryAction = item.status === 'departamento_visat'
     ? `<button class="btn btn-primary btn-sm" onclick="openControleModal('status','${esc(item.id)}')">Atribuir</button>`
     : item.status === 'com_enfermeiro'
@@ -2878,8 +2919,8 @@ function renderControleFichaRow(item){
     <td><b style="font-family:var(--font-mono)">${esc(item.numeroFicha || 'S/N')}</b><div class="controle-status-label">${esc(statusLabel)}</div>${controleFichaDistributionChip(item)}</td>
     <td>${controleFichaLinkedSummary(item)}</td>
     <td>${fmtDate(controleFichaStatusDate(item))}</td>
-    <td><span class="badge ${item.status==='devolvida'?'green':'amber'}">${controleFichaDays(item)} dia(s)</span></td>
-    <td>${esc(nurse)}</td>
+    <td><span class="badge ${item.status==='devolvida'?'green':overdue?'red':'amber'}">${overdue?'Alerta: ':''}${controleFichaDays(item)} dia(s)</span></td>
+    <td>${esc(responsible)}</td>
     <td><div class="row-actions">${primaryAction}<button class="btn btn-ghost btn-sm" onclick="openControleModal('edit','${esc(item.id)}')">Corrigir</button></div></td>
   </tr>`;
 }
@@ -2945,6 +2986,12 @@ async function submitControleDistribuicao(event){
   }
 }
 function setControleTab(tab){ controleTab = tab; render(); }
+function bindControleFichasEvents(){
+  const numero = document.getElementById('controleBuscaNumero');
+  if(numero) numero.addEventListener('input', event=>{ controleBuscaNumero = event.target.value; render(); consultaInputFocus('controleBuscaNumero'); });
+  const nome = document.getElementById('controleBuscaNome');
+  if(nome) nome.addEventListener('input', event=>{ controleBuscaNome = event.target.value; render(); consultaInputFocus('controleBuscaNome'); });
+}
 function closeControleModal(){ document.getElementById('controleModal')?.remove(); }
 function controleModalField(label,name,value,type='text',required=false){
   return `<div class="field"><label>${esc(label)}${required?' <span class="req">*</span>':''}</label><input name="${name}" type="${type}" value="${esc(value||'')}" ${required?'required':''}></div>`;
@@ -2964,10 +3011,10 @@ function openControleModal(mode,id=''){
       <div class="field"><label>Status desejado <span class="req">*</span></label><select name="status" required>
         <option value="departamento_visat" ${statusValue==='departamento_visat'?'selected':''}>Departamento VISAT</option>
         <option value="com_enfermeiro" ${statusValue==='com_enfermeiro'?'selected':''}>Com enfermeiro</option>
-        <option value="devolvida" ${statusValue==='devolvida'?'selected':''}>Devolvida à Epidemio</option>
+        <option value="devolvida" ${statusValue==='devolvida'?'selected':''}>Epidemiologia — Finalizada</option>
       </select></div>
     </div>
-    <div class="field-grid" style="margin-top:12px"><div class="field" id="controleNurseField"><label>Enfermeiro responsável <span class="req">*</span></label><select name="enfermeiro"><option value="">Selecione</option>${CONTROLE_FICHA_NURSES.map(n=>`<option value="${esc(n)}" ${n===nurseValue?'selected':''}>${esc(n)}</option>`).join('')}</select></div>${controleModalField(statusValue==='devolvida'?'Data da devolução':'Data da mudança','dataStatus',dateValue,'date',true)}</div>
+    <div class="field-grid" style="margin-top:12px"><div class="field" id="controleNurseField"><label>Enfermeiro responsável <span class="req">*</span></label><select name="enfermeiro"><option value="">Selecione</option>${CONTROLE_FICHA_NURSES.map(n=>`<option value="${esc(n)}" ${n===nurseValue?'selected':''}>${esc(n)}</option>`).join('')}</select></div>${controleModalField(statusValue==='devolvida'?'Data da finalização':'Data da mudança','dataStatus',dateValue,'date',true)}</div>
     <div class="field" style="margin-top:12px">${controleModalField('Observações','observacoes',item.observacoes||'','text',false)}</div>` : `
     <div class="field-grid">
       ${controleModalField('Nº da Ficha','numeroFicha',item?.numeroFicha||'','text',true)}
@@ -3336,6 +3383,7 @@ function render(){
     if (typeof initVoiceDictation === 'function') initVoiceDictation();
   }
   if(view==='consulta') bindConsultaEvents();
+  if(view==='controleFichas') bindControleFichasEvents();
   if(view==='analytics' || view==='analytics2025' || view==='analytics2024') bindAnalyticsEvents();
 }
 
