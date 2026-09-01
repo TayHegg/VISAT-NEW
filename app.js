@@ -2735,7 +2735,8 @@ const CONTROLE_FICHA_STATUS = {
   com_enfermeiro: {label:'Com enfermeiro'},
   devolvida: {label:'Devolvida à Epidemio'},
 };
-const CONTROLE_FICHA_NURSES = ['Julio Cesar','Luciane Manhães'];
+const CONTROLE_FICHA_NURSES = ['Julio Cesar','Luciane Manhães','Neves Cunha'];
+const CONTROLE_FICHA_DESTINATIONS = ['Departamento VISAT','Julio Cesar','Luciane Manhães','Neves Cunha','Epidemiologia'];
 
 function todayISO(){
   const d = new Date();
@@ -2777,6 +2778,7 @@ function controleFichaTabMatches(item, tab){
   if(tab === 'departamento_visat') return item.status === 'departamento_visat';
   if(tab === 'julio_cesar') return item.status === 'com_enfermeiro' && item.enfermeiroResponsavel === 'Julio Cesar';
   if(tab === 'luciane_manhaes') return item.status === 'com_enfermeiro' && item.enfermeiroResponsavel === 'Luciane Manhães';
+  if(tab === 'neves_cunha') return item.status === 'com_enfermeiro' && item.enfermeiroResponsavel === 'Neves Cunha';
   if(tab === 'devolvida') return item.status === 'devolvida';
   return true;
 }
@@ -2828,6 +2830,7 @@ function renderControleFichas(){
     ['departamento_visat','Departamento VISAT'],
     ['julio_cesar','Julio Cesar'],
     ['luciane_manhaes','Luciane Manhães'],
+    ['neves_cunha','Neves Cunha'],
     ['devolvida','Devolvidas à Epidemio'],
   ];
   const currentTab = tabs.some(([key])=>key===controleTab) ? controleTab : 'todas';
@@ -2853,7 +2856,7 @@ function renderControleFichas(){
       </div>
       <form class="controle-distribuicao-form" id="controleDistribuicaoForm" onsubmit="submitControleDistribuicao(event)">
         <div class="field controle-distribuicao-numeros"><label for="controleDistribuicaoNumeros">Nº das fichas <span class="req">*</span></label><textarea id="controleDistribuicaoNumeros" name="numeros" rows="2" placeholder="Ex.: 358, 368, 475, 125, 65" required></textarea><div class="hint">Você pode separar por vírgula, ponto e vírgula ou quebra de linha.</div></div>
-        <div class="field"><label for="controleDistribuicaoDestino">Distribuir para <span class="req">*</span></label><select id="controleDistribuicaoDestino" name="destino" required><option value="">Selecione o destino</option><option value="Julio Cesar">Julio Cesar</option><option value="Luciane Manhães">Luciane Manhães</option><option value="Epidemiologia">Epidemiologia</option></select></div>
+        <div class="field"><label for="controleDistribuicaoDestino">Distribuir para <span class="req">*</span></label><select id="controleDistribuicaoDestino" name="destino" required><option value="">Selecione o destino</option>${CONTROLE_FICHA_DESTINATIONS.map(destino=>`<option value="${esc(destino)}">${esc(destino)}</option>`).join('')}</select></div>
         <div class="field"><label for="controleDistribuicaoData">Data da distribuição <span class="req">*</span></label><input id="controleDistribuicaoData" name="dataDistribuicao" type="date" value="${todayISO()}" required></div>
         <div class="controle-distribuicao-submit"><button class="btn btn-primary" type="submit">Distribuir fichas</button></div>
       </form>
@@ -2888,8 +2891,8 @@ async function submitControleDistribuicao(event){
   const destino = String(form.elements.destino?.value || '');
   const dataDistribuicao = String(form.elements.dataDistribuicao?.value || todayISO());
   if(!numbers.length){ showToast('Informe pelo menos um número de ficha.'); return; }
-  if(!['Julio Cesar','Luciane Manhães','Epidemiologia'].includes(destino)){ showToast('Selecione Julio Cesar, Luciane Manhães ou Epidemiologia.'); return; }
-  const targetStatus = destino === 'Epidemiologia' ? 'devolvida' : 'com_enfermeiro';
+  if(!CONTROLE_FICHA_DESTINATIONS.includes(destino)){ showToast('Selecione um destino válido para a distribuição.'); return; }
+  const targetStatus = destino === 'Epidemiologia' ? 'devolvida' : destino === 'Departamento VISAT' ? 'departamento_visat' : 'com_enfermeiro';
   const saved = [];
   const failed = [];
   for(const numero of numbers){
@@ -2994,8 +2997,8 @@ function openControleModal(mode,id=''){
     if(isStatus){
       const target = String(data.get('status')||'');
       const nurse = String(data.get('enfermeiro')||'');
-      if(target === 'com_enfermeiro' && !CONTROLE_FICHA_NURSES.includes(nurse)){ showToast('Selecione Julio Cesar ou Luciane Manhães.'); return; }
-      const next = {...item, status:target, enfermeiroResponsavel:target==='com_enfermeiro'?nurse:target==='devolvida'?(item.enfermeiroResponsavel||''):'', dataStatusAtual:String(data.get('dataStatus')||todayISO()), observacoes:String(data.get('observacoes')||'').trim()};
+      if(target === 'com_enfermeiro' && !CONTROLE_FICHA_NURSES.includes(nurse)){ showToast('Selecione Julio Cesar, Luciane Manhães ou Neves Cunha.'); return; }
+      const next = {...item, status:target, enfermeiroResponsavel:target==='com_enfermeiro'?nurse:'', dataStatusAtual:String(data.get('dataStatus')||todayISO()), observacoes:String(data.get('observacoes')||'').trim()};
       if(target === 'com_enfermeiro') next.dataAtribuicaoEnfermeiro = next.dataStatusAtual;
       if(target === 'devolvida') next.dataDevolucaoEpidemio = next.dataStatusAtual;
       next.historico = [...(item.historico||[]), {statusAnterior:item.status||null,statusNovo:target,enfermeiroAnterior:item.enfermeiroResponsavel||null,enfermeiroNovo:next.enfermeiroResponsavel||null,dataMudanca:new Date().toISOString(),observacoes:next.observacoes||''}];
