@@ -2870,14 +2870,14 @@ function renderProducaoMensal(owner=''){
   const allMonthItems = producaoFilteredItems();
   const julioTotal = producaoTotal(allMonthItems.filter(item=>item.responsavel==='Julio Cesar'));
   const lucianeTotal = producaoTotal(allMonthItems.filter(item=>item.responsavel==='Luciane Manhães'));
-  const departmentTotal = julioTotal + lucianeTotal;
+  const departmentTotal = producaoTotal(allMonthItems);
   const codeSummary = producaoSummaryByCode(items);
   const monthLabel = producaoMesFiltro ? producaoMesFiltro.split('-').reverse().join('/') : 'mês selecionado';
   const scopeLabel = selectedOwner ? `Produção de ${selectedOwner}` : 'Produção do Departamento de Vigilância e Saúde do Trabalhador';
   const activeView = selectedOwner || 'departamento';
   const peopleTabs = producaoPeopleList().map(person=>`<button class="producao-view-tab ${activeView===person?'active':''}" onclick="setProducaoView('${esc(person)}')">${esc(person)}</button>`).join('');
   return `<div class="producao-page">
-    <div class="producao-page-header"><div><div class="eyebrow">Produção Mensal · ${esc(monthLabel)}</div><h2>${esc(scopeLabel)}</h2><p class="hint">Os lançamentos de Julio Cesar e Luciane Manhães são somados no total do Departamento.</p></div><div class="producao-header-actions"><button class="btn btn-ghost" onclick="imprimirMapaProducao('${esc(selectedOwner)}')">Gerar PDF</button><button class="btn btn-primary" onclick="openProducaoForm('${esc(selectedOwner)}')"><span style="font-size:18px;line-height:0">+</span> Nova Produção</button></div></div>
+    <div class="producao-page-header"><div><div class="eyebrow">Produção Mensal · ${esc(monthLabel)}</div><h2>${esc(scopeLabel)}</h2><p class="hint">Todos os lançamentos individuais são somados no total do Departamento de Vigilância e Saúde do Trabalhador.</p></div><div class="producao-header-actions"><button class="btn btn-ghost" onclick="imprimirMapaProducao('${esc(selectedOwner)}')">Gerar PDF</button><button class="btn btn-primary" onclick="openProducaoForm('${esc(selectedOwner)}')"><span style="font-size:18px;line-height:0">+</span> Nova Produção</button></div></div>
     <div class="producao-view-tabs"><button class="producao-view-tab ${activeView==='departamento'?'active':''}" onclick="setProducaoView('departamento')">Departamento</button>${peopleTabs}<button class="producao-view-tab producao-add-tab" title="Adicionar pessoa ou área" onclick="adicionarPessoaProducao()">+</button></div>
     <div class="panel producao-filter-panel"><div class="field"><label for="producaoMesFiltro">Mês de referência</label><input id="producaoMesFiltro" type="month" value="${esc(producaoMesFiltro)}" onchange="setProducaoMesFiltro(this.value)"></div><div class="hint">A produção é contabilizada pela data do lançamento.</div></div>
     <div class="grid-stats producao-stats"><div class="stat-card primary"><div class="n">${departmentTotal}</div><div class="l">Total do Departamento</div><div class="stat-sub">Vigilância e Saúde do Trabalhador</div></div><div class="stat-card amber"><div class="n">${julioTotal}</div><div class="l">Julio Cesar</div></div><div class="stat-card green"><div class="n">${lucianeTotal}</div><div class="l">Luciane Manhães</div></div></div>
