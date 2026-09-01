@@ -2673,6 +2673,8 @@ let producaoMensal = [];
 let producaoView = 'departamento';
 let producaoMesFiltro = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
 let producaoFormOwner = '';
+let producaoPessoasExtras = [];
+let producaoPessoaSelecionada = '';
 
 const PRODUCAO_RESPONSAVEIS = ['Julio Cesar','Luciane Manhães'];
 const PRODUCAO_SIA_SUS_CODES = [
@@ -2820,13 +2822,25 @@ function setProducaoMesFiltro(value){
   render();
 }
 function setProducaoView(viewName){
-  if(viewName==='julio') goTo('producaoJulio');
-  else if(viewName==='luciane') goTo('producaoLuciane');
-  else goTo('producaoDepartamento');
+  if(viewName==='julio') { producaoPessoaSelecionada = ''; goTo('producaoJulio'); }
+  else if(viewName==='luciane') { producaoPessoaSelecionada = ''; goTo('producaoLuciane'); }
+  else if(viewName==='departamento' || !viewName) { producaoPessoaSelecionada = ''; goTo('producaoDepartamento'); }
+  else { producaoPessoaSelecionada = viewName; view = 'producaoDepartamento'; render(); }
+}
+function adicionarPessoaProducao(){
+  const name = window.prompt('Digite o nome da nova pessoa/área:');
+  const clean = String(name || '').trim().replace(/\s+/g,' ');
+  if(!clean) return;
+  if(!producaoPeopleList().some(existing=>existing.toLocaleLowerCase('pt-BR')===clean.toLocaleLowerCase('pt-BR'))){
+    producaoPessoasExtras.push(clean);
+    salvarPessoasProducao();
+  }
+  producaoFormOwner = clean;
+  openProducaoForm(clean);
 }
 function renderProducaoForm(){
   const today = todayISO();
-  const ownerOptions = PRODUCAO_RESPONSAVEIS.map(owner=>`<option value="${esc(owner)}" ${owner===producaoFormOwner?'selected':''}>${esc(owner)}</option>`).join('');
+  const ownerOptions = producaoPeopleList().map(owner=>`<option value="${esc(owner)}" ${owner===producaoFormOwner?'selected':''}>${esc(owner)}</option>`).join('');
   const codeOptions = PRODUCAO_SIA_SUS_CODES.map(([code,description])=>`<option value="${esc(code)}">${esc(code)} — ${esc(description)}</option>`).join('');
   return `<div class="panel producao-form-panel">
     <div class="producao-form-header"><div><div class="eyebrow">Mapa diário de produção — VISAT</div><h2>Nova Produção</h2><p class="hint">Registre uma atividade realizada. O lançamento será somado automaticamente à produção do responsável e ao total do Departamento.</p></div><button class="btn btn-ghost" type="button" onclick="goTo('producaoDepartamento')">Voltar para produção</button></div>
@@ -2835,44 +2849,45 @@ function renderProducaoForm(){
         <div class="field"><label for="producaoData">Data <span class="req">*</span></label><input id="producaoData" name="data" type="date" value="${today}" required></div>
         <div class="field"><label for="producaoResponsavel">Responsável <span class="req">*</span></label><select id="producaoResponsavel" name="responsavel" required><option value="">Selecione</option>${ownerOptions}</select><div class="hint">Julio Cesar e Luciane Manhães registram suas próprias produções.</div></div>
         <div class="field"><label for="producaoQuantidade">Quantidade <span class="req">*</span></label><input id="producaoQuantidade" name="quantidade" type="number" min="1" step="1" value="1" required></div>
-        <div class="field"><label for="producaoProcesso">Processo / Protocolo</label><input id="producaoProcesso" name="processoProtocolo" type="text" placeholder="Número do processo ou protocolo"></div>
+        <div class="field"><label for="producaoProcessoEmpresa">Processo / Empresa / Contribuinte</label><input id="producaoProcessoEmpresa" name="processoEmpresaContribuinte" type="text" placeholder="Processo, empresa ou contribuinte"></div>
       </div></div>
-      <div class="form-section"><div class="sec-title">Dados da atividade</div><div class="field-grid">
-        <div class="field span2"><label for="producaoRazaoSocial">Razão Social</label><input id="producaoRazaoSocial" name="razaoSocial" type="text" placeholder="Empresa ou instituição"></div>
-        <div class="field span2"><label for="producaoEndereco">Endereço</label><input id="producaoEndereco" name="endereco" type="text" placeholder="Endereço da atividade"></div>
-        <div class="field span2"><label for="producaoAtividade">Atividade realizada <span class="req">*</span></label><input id="producaoAtividade" name="atividade" type="text" placeholder="Descreva a atividade realizada" required></div>
-        <div class="field span2"><label for="producaoCodigo">Código(s) SIA/SUS</label><input id="producaoCodigo" name="codigoSiaSus" type="text" list="producaoCodigos" placeholder="Digite ou selecione um código; se houver mais de um, separe por vírgula"><datalist id="producaoCodigos">${codeOptions}</datalist><div class="hint">Os códigos e significados estão disponíveis no mapa de produção recebido.</div><details class="producao-code-reference"><summary>Consultar códigos e significados</summary><div>${PRODUCAO_SIA_SUS_CODES.map(([code,description])=>`<div><b>${esc(code)}</b><span>${esc(description)}</span></div>`).join('')}</div></details></div>
-        <div class="field"><label for="producaoAutos">Autos / Situação</label><input id="producaoAutos" name="autosSituacao" type="text" placeholder="Número do auto ou situação"></div>
+      <div class="form-section"><div class="sec-title">Dados da atividade e fiscalização</div><div class="field-grid">
+        <div class="field span2"><label for="producaoEnderecoComunicacao">Endereço / Meio de Comunicação</label><input id="producaoEnderecoComunicacao" name="enderecoMeioComunicacao" type="text" placeholder="Endereço, telefone, e-mail ou outro meio de comunicação"></div>
+        <div class="field span2"><label for="producaoAtividade">Atividade <span class="req">*</span></label><input id="producaoAtividade" name="atividade" type="text" placeholder="Descreva a atividade realizada" required></div>
+        <div class="field span2"><label for="producaoCodigo">Código SIA/SUS</label><input id="producaoCodigo" name="codigoSiaSus" type="text" list="producaoCodigos" placeholder="Digite ou selecione o código; se houver mais de um, separe por vírgula"><datalist id="producaoCodigos">${codeOptions}</datalist><div class="hint">Os códigos e significados estão disponíveis no mapa de produção recebido.</div><details class="producao-code-reference"><summary>Consultar códigos e significados</summary><div>${PRODUCAO_SIA_SUS_CODES.map(([code,description])=>`<div><b>${esc(code)}</b><span>${esc(description)}</span></div>`).join('')}</div></details></div>
+        <div class="field"><label for="producaoAutos">Autos / Situação</label><input id="producaoAutos" name="autosSituacao" type="text" placeholder="Autos ou situação"></div>
         <div class="field"><label for="producaoOrdem">Ordem de Fiscalização</label><input id="producaoOrdem" name="ordemFiscalizacao" type="text" placeholder="Ordem de fiscalização"></div>
-        <div class="field"><label for="producaoChefias">Chefias</label><input id="producaoChefias" name="chefias" type="text" placeholder="Chefias envolvidas"></div>
+        <div class="field"><label for="producaoAreaAtuacao">Área de Atuação</label><input id="producaoAreaAtuacao" name="areaAtuacao" type="text" placeholder="Área de atuação"></div>
+        <div class="field"><label for="producaoChefias">Chefias</label><input id="producaoChefias" name="chefia" type="text" placeholder="Chefias envolvidas"></div>
       </div></div>
       <div class="form-actions producao-form-actions"><button class="btn btn-ghost" type="button" onclick="goTo('producaoDepartamento')">Cancelar</button><button class="btn btn-primary" type="submit">Salvar produção</button></div>
     </form>
   </div>`;
 }
 function renderProducaoMensal(owner=''){
-  const items = producaoFilteredItems(owner);
+  const selectedOwner = owner || producaoPessoaSelecionada;
+  const items = producaoFilteredItems(selectedOwner);
   const allMonthItems = producaoFilteredItems();
   const julioTotal = producaoTotal(allMonthItems.filter(item=>item.responsavel==='Julio Cesar'));
   const lucianeTotal = producaoTotal(allMonthItems.filter(item=>item.responsavel==='Luciane Manhães'));
   const departmentTotal = julioTotal + lucianeTotal;
   const codeSummary = producaoSummaryByCode(items);
   const monthLabel = producaoMesFiltro ? producaoMesFiltro.split('-').reverse().join('/') : 'mês selecionado';
-  const scopeLabel = owner ? `Produção de ${owner}` : 'Produção do Departamento de Vigilância e Saúde do Trabalhador';
-  const activeView = owner === 'Julio Cesar' ? 'julio' : owner === 'Luciane Manhães' ? 'luciane' : 'departamento';
+  const scopeLabel = selectedOwner ? `Produção de ${selectedOwner}` : 'Produção do Departamento de Vigilância e Saúde do Trabalhador';
+  const activeView = selectedOwner || 'departamento';
+  const peopleTabs = producaoPeopleList().map(person=>`<button class="producao-view-tab ${activeView===person?'active':''}" onclick="setProducaoView('${esc(person)}')">${esc(person)}</button>`).join('');
   return `<div class="producao-page">
-    <div class="producao-page-header"><div><div class="eyebrow">Produção Mensal · ${esc(monthLabel)}</div><h2>${esc(scopeLabel)}</h2><p class="hint">Os lançamentos de Julio Cesar e Luciane Manhães são somados no total do Departamento.</p></div><button class="btn btn-primary" onclick="openProducaoForm('${esc(owner)}')"><span style="font-size:18px;line-height:0">+</span> Nova Produção</button></div>
-    <div class="producao-view-tabs"><button class="producao-view-tab ${activeView==='departamento'?'active':''}" onclick="setProducaoView('departamento')">Departamento</button><button class="producao-view-tab ${activeView==='julio'?'active':''}" onclick="setProducaoView('julio')">Julio Cesar</button><button class="producao-view-tab ${activeView==='luciane'?'active':''}" onclick="setProducaoView('luciane')">Luciane Manhães</button></div>
+    <div class="producao-page-header"><div><div class="eyebrow">Produção Mensal · ${esc(monthLabel)}</div><h2>${esc(scopeLabel)}</h2><p class="hint">Os lançamentos de Julio Cesar e Luciane Manhães são somados no total do Departamento.</p></div><div class="producao-header-actions"><button class="btn btn-ghost" onclick="imprimirMapaProducao('${esc(selectedOwner)}')">Gerar PDF</button><button class="btn btn-primary" onclick="openProducaoForm('${esc(selectedOwner)}')"><span style="font-size:18px;line-height:0">+</span> Nova Produção</button></div></div>
+    <div class="producao-view-tabs"><button class="producao-view-tab ${activeView==='departamento'?'active':''}" onclick="setProducaoView('departamento')">Departamento</button>${peopleTabs}<button class="producao-view-tab producao-add-tab" title="Adicionar pessoa ou área" onclick="adicionarPessoaProducao()">+</button></div>
     <div class="panel producao-filter-panel"><div class="field"><label for="producaoMesFiltro">Mês de referência</label><input id="producaoMesFiltro" type="month" value="${esc(producaoMesFiltro)}" onchange="setProducaoMesFiltro(this.value)"></div><div class="hint">A produção é contabilizada pela data do lançamento.</div></div>
     <div class="grid-stats producao-stats"><div class="stat-card primary"><div class="n">${departmentTotal}</div><div class="l">Total do Departamento</div><div class="stat-sub">Vigilância e Saúde do Trabalhador</div></div><div class="stat-card amber"><div class="n">${julioTotal}</div><div class="l">Julio Cesar</div></div><div class="stat-card green"><div class="n">${lucianeTotal}</div><div class="l">Luciane Manhães</div></div></div>
-    <div class="panel"><div class="producao-section-heading"><div><h2>${esc(scopeLabel)} — ${esc(monthLabel)}</h2><div class="hint">${items.length} lançamento(s) · ${producaoTotal(items)} unidade(s) contabilizada(s).</div></div></div>${items.length ? `<div class="table-scroll"><table class="producao-table"><thead><tr><th>Data</th><th>Responsável</th><th>Processo / Protocolo</th><th>Razão Social</th><th>Atividade</th><th>Código(s) SIA/SUS</th><th>Qtd.</th><th>Autos / Situação</th><th>Ações</th></tr></thead><tbody>${items.map(item=>renderProducaoRow(item)).join('')}</tbody></table></div>` : `<div class="empty-state"><div style="font-size:38px;color:var(--border);margin-bottom:8px">—</div><b>Nenhuma produção lançada neste mês</b><div style="margin-top:5px">Use “Nova Produção” para registrar uma atividade.</div></div>`}</div>
+    <div class="panel"><div class="producao-section-heading"><div><h2>${esc(scopeLabel)} — ${esc(monthLabel)}</h2><div class="hint">${items.length} lançamento(s) · ${producaoTotal(items)} unidade(s) contabilizada(s).</div></div></div>${items.length ? `<div class="table-scroll"><table class="producao-table"><thead><tr><th>Data</th><th>Responsável</th><th>Processo / Empresa / Contribuinte</th><th>Endereço / Meio de Comunicação</th><th>Atividade</th><th>Código SIA/SUS</th><th>Autos / Situação</th><th>Ordem de Fiscalização</th><th>Área de Atuação</th><th>Chefias</th><th>Qtd.</th><th>Ações</th></tr></thead><tbody>${items.map(item=>renderProducaoRow(item)).join('')}</tbody></table></div>` : `<div class="empty-state"><div style="font-size:38px;color:var(--border);margin-bottom:8px">—</div><b>Nenhuma produção lançada neste mês</b><div style="margin-top:5px">Use “Nova Produção” para registrar uma atividade.</div></div>`}</div>
     <div class="panel"><div class="producao-section-heading"><div><h2>Resumo por código SIA/SUS</h2><div class="hint">Contagem dos lançamentos da visão atual.</div></div></div>${codeSummary.length ? `<div class="producao-code-summary">${codeSummary.map(([code,total])=>`<div class="producao-code-row"><div><b>${esc(code)}</b><span>${esc(producaoDescription(code) || 'Código informado no lançamento')}</span></div><strong>${total}</strong></div>`).join('')}</div>` : `<div class="empty-state compact">Nenhum código contabilizado neste mês.</div>`}</div>
   </div>`;
 }
 function renderProducaoRow(item){
   const codes = producaoCodes(item);
-  const operationalDetails = [item.autosSituacao ? `Autos/Situação: ${item.autosSituacao}` : '', item.ordemFiscalizacao ? `Ordem: ${item.ordemFiscalizacao}` : '', item.chefias ? `Chefias: ${item.chefias}` : ''].filter(Boolean);
-  return `<tr><td>${esc(fmtDate(item.data))}</td><td><b>${esc(item.responsavel)}</b></td><td>${esc(item.processoProtocolo || '—')}</td><td>${esc(item.razaoSocial || '—')}</td><td><span class="producao-activity">${esc(item.atividade || '—')}</span>${item.endereco ? `<small>${esc(item.endereco)}</small>` : ''}</td><td>${codes.length ? codes.map(code=>`<span class="producao-code-chip" title="${esc(producaoDescription(code) || 'Código informado')}">${esc(code)}</span>`) .join(' ') : '—'}</td><td><b class="producao-quantity">${Math.max(1,Number(item.quantidade)||1)}</b></td><td>${operationalDetails.length ? operationalDetails.map(detail=>`<small>${esc(detail)}</small>`).join('') : '—'}</td><td><button class="btn btn-ghost btn-sm" onclick="askDeleteProducao('${esc(item.id)}')">Excluir</button></td></tr>`;
+  return `<tr><td>${esc(fmtDate(item.data))}</td><td><b>${esc(item.responsavel)}</b></td><td>${esc(item.processoEmpresaContribuinte || item.processoProtocolo || '—')}</td><td>${esc(item.enderecoMeioComunicacao || item.endereco || '—')}</td><td><span class="producao-activity">${esc(item.atividade || '—')}</span></td><td>${codes.length ? codes.map(code=>`<span class="producao-code-chip" title="${esc(producaoDescription(code) || 'Código informado')}">${esc(code)}</span>`).join(' ') : '—'}</td><td>${esc(item.autosSituacao || '—')}</td><td>${esc(item.ordemFiscalizacao || '—')}</td><td>${esc(item.areaAtuacao || '—')}</td><td>${esc(item.chefia || item.chefias || '—')}</td><td><b class="producao-quantity">${Math.max(1,Number(item.quantidade)||1)}</b></td><td><button class="btn btn-ghost btn-sm" onclick="askDeleteProducao('${esc(item.id)}')">Excluir</button></td></tr>`;
 }
 function askDeleteProducao(id){
   const item = producaoMensal.find(entry=>entry.id===id);
@@ -2893,14 +2908,14 @@ async function submitProducao(event){
     data:String(data.get('data') || todayISO()),
     responsavel:String(data.get('responsavel') || '').trim(),
     quantidade:Number(data.get('quantidade') || 1),
-    processoProtocolo:String(data.get('processoProtocolo') || '').trim(),
-    razaoSocial:String(data.get('razaoSocial') || '').trim(),
-    endereco:String(data.get('endereco') || '').trim(),
+    processoEmpresaContribuinte:String(data.get('processoEmpresaContribuinte') || '').trim(),
+    enderecoMeioComunicacao:String(data.get('enderecoMeioComunicacao') || '').trim(),
     atividade:String(data.get('atividade') || '').trim(),
     codigoSiaSus:String(data.get('codigoSiaSus') || '').split(/[,;\n]+/).map(code=>code.trim()).filter(Boolean),
     autosSituacao:String(data.get('autosSituacao') || '').trim(),
     ordemFiscalizacao:String(data.get('ordemFiscalizacao') || '').trim(),
-    chefias:String(data.get('chefias') || '').trim(),
+    areaAtuacao:String(data.get('areaAtuacao') || '').trim(),
+    chefia:String(data.get('chefia') || '').trim(),
     createdAt:new Date().toISOString(),
   });
   if(!item.responsavel || !item.atividade){ showToast('Informe o responsável e a atividade realizada.'); return; }
@@ -2908,8 +2923,27 @@ async function submitProducao(event){
   if(button){ button.disabled = true; button.textContent = 'Salvando...'; }
   producaoMensal.push(item);
   const ok = await upsertProducaoRemote(item);
-  if(ok){ producaoFormOwner = item.responsavel; showToast('Produção registrada com sucesso.'); goTo(item.responsavel==='Julio Cesar'?'producaoJulio':'producaoLuciane'); }
+  if(ok){ producaoFormOwner = item.responsavel; producaoPessoaSelecionada = PRODUCAO_RESPONSAVEIS.includes(item.responsavel) ? '' : item.responsavel; showToast('Produção registrada com sucesso.'); goTo(item.responsavel==='Julio Cesar'?'producaoJulio':item.responsavel==='Luciane Manhães'?'producaoLuciane':'producaoDepartamento'); }
   else { producaoMensal = producaoMensal.filter(entry=>entry.id!==item.id); if(button){button.disabled=false;button.textContent='Salvar produção';} render(); showToast('Não foi possível salvar a produção no banco de dados.'); }
+}
+
+function imprimirMapaProducao(owner=''){
+  const selectedOwner = owner || producaoPessoaSelecionada;
+  const items = producaoFilteredItems(selectedOwner);
+  const monthLabel = producaoMesFiltro ? producaoMesFiltro.split('-').reverse().join('/') : 'mês selecionado';
+  const title = selectedOwner ? `Produção de ${selectedOwner}` : 'Produção do Departamento de Vigilância e Saúde do Trabalhador';
+  const rows = items.map(item=>{
+    const codes = producaoCodes(item).join(', ') || '—';
+    return `<tr><td>${esc(fmtDate(item.data))}</td><td>${esc(item.ordemFiscalizacao || '—')}</td><td>${esc(item.processoEmpresaContribuinte || item.processoProtocolo || '—')}</td><td>${esc(item.enderecoMeioComunicacao || item.endereco || '—')}</td><td>${esc(item.atividade || '—')}</td><td>${esc(codes)}</td><td>${esc(item.autosSituacao || '—')}</td><td>${esc(item.areaAtuacao || '—')}</td><td>${esc(item.chefia || item.chefias || '—')}</td><td>${esc(item.responsavel || '—')}</td></tr>`;
+  }).join('');
+  const codeSummary = producaoSummaryByCode(items).map(([code,total])=>`<tr><td>${esc(code)}</td><td>${esc(producaoDescription(code) || 'Código informado no lançamento')}</td><td>${total}</td></tr>`).join('');
+  const printWindow = window.open('', '_blank');
+  if(!printWindow){ showToast('Permita pop-ups para gerar o PDF do mapa de produção.'); return; }
+  printWindow.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Mapa de Produção VISAT — ${esc(monthLabel)}</title><style>
+    @page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#142b35;margin:0;font-size:8px}h1{font-size:16px;margin:0 0 3px;text-align:center;letter-spacing:.02em}h2{font-size:11px;margin:8px 0 4px;color:#123f4e}.meta{display:flex;justify-content:space-between;border:1px solid #6b7d83;padding:5px 7px;margin:8px 0}.meta b{font-size:8px}.map-table,.summary{width:100%;border-collapse:collapse;table-layout:fixed}.map-table th,.map-table td,.summary th,.summary td{border:1px solid #718087;padding:4px 3px;vertical-align:top;overflow-wrap:anywhere}.map-table th{background:#e7eef0;font-size:7px;text-transform:uppercase;text-align:center}.map-table th:nth-child(1){width:7%}.map-table th:nth-child(2){width:8%}.map-table th:nth-child(3){width:14%}.map-table th:nth-child(4){width:15%}.map-table th:nth-child(5){width:15%}.map-table th:nth-child(6){width:11%}.map-table th:nth-child(7){width:10%}.map-table th:nth-child(8){width:10%}.map-table th:nth-child(9){width:10%}.map-table th:nth-child(10){width:10%}.summary{width:55%;margin-top:7px}.summary th{background:#e7eef0;text-align:left}.footer{display:flex;gap:20px;margin-top:18px}.signature{border-top:1px solid #52656b;width:42%;padding-top:4px;text-align:center}.muted{color:#5c6d72;margin-top:5px}@media print{button{display:none}}
+  </style></head><body><h1>MAPA DIÁRIO DE PRODUÇÃO — VISAT</h1><div style="text-align:center;font-size:10px;font-weight:bold">${esc(title)}</div><div class="meta"><span><b>MÊS DE REFERÊNCIA:</b> ${esc(monthLabel)}</span><span><b>LANÇAMENTOS:</b> ${items.length}</span><span><b>UNIDADES:</b> ${producaoTotal(items)}</span></div><table class="map-table"><thead><tr><th>Data</th><th>Ordem de Fiscalização</th><th>Processo / Empresa / Contribuinte</th><th>Endereço / Meio de Comunicação</th><th>Atividade</th><th>Código SIA/SUS</th><th>Autos / Situação</th><th>Área de Atuação</th><th>Chefias</th><th>Responsável</th></tr></thead><tbody>${rows || `<tr><td colspan="10" style="text-align:center;height:45px">Nenhuma produção lançada neste mês.</td></tr>`}</tbody></table><h2>Resumo por código SIA/SUS</h2><table class="summary"><thead><tr><th>Código</th><th>Significado</th><th>Total</th></tr></thead><tbody>${codeSummary || '<tr><td colspan="3">Nenhum código informado.</td></tr>'}</tbody></table><div class="footer"><div class="signature">Assinatura e carimbo da equipe de fiscalização</div><div class="signature">Responsável pelo preenchimento</div></div><div class="muted">Use a opção “Salvar como PDF” na janela de impressão do navegador.</div></body></html>`);
+  printWindow.document.close();
+  printWindow.onload = ()=>{ printWindow.focus(); printWindow.print(); };
 }
 
 /* ============================= CONTROLE DE FICHAS ============================= */
@@ -2940,10 +2974,24 @@ function normalizeProducaoRecord(r){
   if(!item.id) item.id = uid();
   item.quantidade = Math.max(1, Number(item.quantidade) || 1);
   item.data = String(item.data || '').trim();
-  item.responsavel = PRODUCAO_RESPONSAVEIS.includes(item.responsavel) ? item.responsavel : '';
-  item.codigoSiaSus = String(item.codigoSiaSus || '').trim();
+  item.responsavel = String(item.responsavel || '').trim();
+  item.codigoSiaSus = Array.isArray(item.codigoSiaSus) ? item.codigoSiaSus.map(code=>String(code).trim()).filter(Boolean) : String(item.codigoSiaSus || '').split(/[,;\\n]+/).map(code=>code.trim()).filter(Boolean);
   return item;
 }
+function producaoPeopleList(){
+  const fromRecords = producaoMensal.map(item=>String(item.responsavel || '').trim()).filter(Boolean);
+  return [...new Set([...PRODUCAO_RESPONSAVEIS, ...producaoPessoasExtras, ...fromRecords])];
+}
+function carregarPessoasProducao(){
+  try{
+    const saved = JSON.parse(localStorage.getItem('snat_producao_pessoas') || '[]');
+    if(Array.isArray(saved)) producaoPessoasExtras = saved.map(name=>String(name).trim()).filter(name=>name && !PRODUCAO_RESPONSAVEIS.includes(name));
+  }catch(e){ producaoPessoasExtras = []; }
+}
+function salvarPessoasProducao(){
+  try{ localStorage.setItem('snat_producao_pessoas', JSON.stringify(producaoPessoasExtras)); }catch(e){ /* armazenamento opcional */ }
+}
+
 function producaoStorageId(item){ return item.storageId || `producao-${item.id}`; }
 function normalizeControleFichaRecord(r){
   const item = {...r, controleFicha:true};
@@ -3430,6 +3478,7 @@ function bindNavEvents(){
   document.querySelectorAll('.nav-item').forEach(el=>{
     el.addEventListener('click', ()=>{
       if(el.dataset.view === 'producaoNova') producaoFormOwner = '';
+      if(['producaoDepartamento','producaoJulio','producaoLuciane'].includes(el.dataset.view)) producaoPessoaSelecionada = '';
       goTo(el.dataset.view);
     });
   });
@@ -3443,6 +3492,7 @@ async function startApp(){
   document.getElementById('appRoot').innerHTML = APP_SHELL_HTML;
   bindNavEvents();
   await loadRecords();
+  carregarPessoasProducao();
   render();
 }
 
