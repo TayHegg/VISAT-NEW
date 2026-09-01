@@ -2988,9 +2988,19 @@ async function submitControleDistribuicao(event){
 function setControleTab(tab){ controleTab = tab; render(); }
 function bindControleFichasEvents(){
   const numero = document.getElementById('controleBuscaNumero');
-  if(numero) numero.addEventListener('input', event=>{ controleBuscaNumero = event.target.value; render(); consultaInputFocus('controleBuscaNumero'); });
+  if(numero) numero.addEventListener('input', event=>{
+    controleBuscaNumero = event.target.value;
+    if(controleBuscaNumero.trim()) controleBuscaNome = '';
+    render();
+    consultaInputFocus('controleBuscaNumero');
+  });
   const nome = document.getElementById('controleBuscaNome');
-  if(nome) nome.addEventListener('input', event=>{ controleBuscaNome = event.target.value; render(); consultaInputFocus('controleBuscaNome'); });
+  if(nome) nome.addEventListener('input', event=>{
+    controleBuscaNome = event.target.value;
+    if(controleBuscaNome.trim()) controleBuscaNumero = '';
+    render();
+    consultaInputFocus('controleBuscaNome');
+  });
 }
 function closeControleModal(){ document.getElementById('controleModal')?.remove(); }
 function controleModalField(label,name,value,type='text',required=false){
