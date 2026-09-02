@@ -6004,6 +6004,7 @@ function renderPage1(){
         ${field({num:'', label:'Escolaridade', key:'escolaridade', type:'select', options:[['0','Analfabeto'],['1','1ª a 4ª série incompleta do EF'],['2','4ª série completa do EF'],['3','5ª a 8ª série incompleta do EF'],['4','Ensino fundamental completo'],['5','Ensino médio incompleto'],['6','Ensino médio completo'],['7','Educação superior incompleta'],['8','Educação superior completa'],['9','Ignorado'],['10','Não se aplica']], span:'span2'})}
         ${field({num:'', label:'Gestante', key:'gestante', type:'select', options:[['1','1º Trimestre'],['2','2º Trimestre'],['3','3º Trimestre'],['4','Idade gestacional ignorada'],['5','Não'],['6','Não se aplica'],['9','Ignorado']]})}
         ${field({num:'', label:'Número do Cartão SUS', key:'cartaoSus'})}
+        ${field({num:'', label:'CPF', key:'cpf'})}
       </div>
     </div>
 
