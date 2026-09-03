@@ -2669,6 +2669,9 @@ let controleFichas = [];
 let controleTab = 'todas';
 let controleBuscaNumero = '';
 let controleBuscaNome = '';
+let controleBuscaNumeroConfirmada = '';
+let controleBuscaNomeConfirmada = '';
+let controleConsultaDetalheAberta = false;
 let producaoMensal = [];
 let producaoView = 'departamento';
 let producaoMesFiltro = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
@@ -2728,7 +2731,7 @@ async function loadRecords(){
       if(page.length < pageSize) break;
     }
     const loaded = allRows.map(row => row.data).filter(Boolean);
-    controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
+    controleFichas = dedupeControleFichas(loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord));
     producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
     records = loaded.filter(row => !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
   }catch(e){
@@ -2999,7 +3002,21 @@ function normalizeControleFichaRecord(r){
   item.historico = Array.isArray(item.historico) ? item.historico : [];
   return item;
 }
-function controleFichaStorageId(item){ return item.storageId || `cf-${item.id}`; }
+function controleFichaStorageId(item){
+  const numero = normalizeControleFicha(item?.numeroFicha);
+  return numero ? `cf-2026-${numero}` : (item?.storageId || `cf-${item?.id || uid()}`);
+}
+function dedupeControleFichas(items){
+  const byNumber = new Map();
+  items.forEach(item=>{
+    const key = normalizeControleFicha(item.numeroFicha) || `id:${item.id}`;
+    const previous = byNumber.get(key);
+    const score = String(item.updatedAt || item.dataDistribuicao || item.dataStatusAtual || item.createdAt || '');
+    const previousScore = String(previous?.updatedAt || previous?.dataDistribuicao || previous?.dataStatusAtual || previous?.createdAt || '');
+    if(!previous || score >= previousScore) byNumber.set(key, item);
+  });
+  return [...byNumber.values()].map(item=>({...item, id:controleFichaStorageId(item)}));
+}
 function findLinkedRecord(numero){
   const key = normalizeControleFicha(numero);
   if(!key) return null;
@@ -3078,13 +3095,17 @@ function controleFichaLinkedSummary(item){
 async function upsertControleFichaRemote(item){
   try{
     if(!supabaseClient) return false;
-    const payload = {...item, controleFicha:true, storageId:controleFichaStorageId(item), updatedAt:new Date().toISOString()};
+    const payload = {...item, id:controleFichaStorageId(item), controleFicha:true, storageId:controleFichaStorageId(item), anoReferencia:'2026', updatedAt:new Date().toISOString()};
+    Object.assign(item, {id:payload.id, storageId:payload.storageId, anoReferencia:payload.anoReferencia, updatedAt:payload.updatedAt});
     const {error} = await supabaseClient.from('records').upsert({
       id: payload.storageId,
       data: payload,
       updated_at: payload.updatedAt,
     }, {onConflict:'id'});
     if(error) throw error;
+    const {data: verifiedRows, error: verifyError} = await supabaseClient.from('records').select('id').eq('id', payload.storageId).limit(1);
+    if(verifyError) throw verifyError;
+    if(!verifiedRows?.length) throw new Error('A distribuição não foi localizada após o salvamento.');
     return true;
   }catch(error){
     console.error('Falha ao salvar o controle da ficha no Supabase', error);
@@ -3101,8 +3122,8 @@ function renderControleFichas(){
     ['devolvida','Epidemiologia (finalizadas)'],
   ];
   const currentTab = tabs.some(([key])=>key===controleTab) ? controleTab : 'todas';
-  const numeroQuery = normalizeSearchText(controleBuscaNumero).trim();
-  const nomeQuery = normalizeSearchText(controleBuscaNome).trim();
+  const numeroQuery = normalizeSearchText(controleBuscaNumeroConfirmada).trim();
+  const nomeQuery = normalizeSearchText(controleBuscaNomeConfirmada).trim();
   const list = controleFichas
     .filter(item=>controleFichaTabMatches(item,currentTab))
     .filter(item=>{
@@ -3124,12 +3145,13 @@ function renderControleFichas(){
       </div>
     </div>
     <div class="panel controle-pesquisa-panel">
-      <div class="controle-heading"><div><h2>Consultar fichas no fluxo</h2><div class="hint">Pesquise para saber rapidamente com quem cada ficha está.</div></div></div>
+      <div class="controle-heading"><div><h2>Consultar fichas no fluxo</h2><div class="hint">Digite o número ou o nome e clique em <b>Pesquisar</b> para consultar onde a ficha está.</div></div></div>
       <div class="controle-pesquisa-grid">
-        <div class="field"><label for="controleBuscaNumero">Consulta por Nº de Ficha</label><input type="text" id="controleBuscaNumero" value="${esc(controleBuscaNumero)}" placeholder="Digite o número da ficha" inputmode="numeric" autocomplete="off"></div>
-        <div class="field"><label for="controleBuscaNome">Consulta por Nome do Paciente</label><input type="text" id="controleBuscaNome" value="${esc(controleBuscaNome)}" placeholder="Digite o nome do paciente" autocomplete="off"></div>
+        <div class="controle-pesquisa-field"><div class="field"><label for="controleBuscaNumero">Consulta por Nº de Ficha</label><input type="text" id="controleBuscaNumero" value="${esc(controleBuscaNumero)}" placeholder="Digite o número da ficha" inputmode="numeric" autocomplete="off"></div><button type="button" class="btn btn-primary btn-sm" onclick="confirmarControleBusca('numero')">Pesquisar</button></div>
+        <div class="controle-pesquisa-field"><div class="field"><label for="controleBuscaNome">Consulta por Nome do Paciente</label><input type="text" id="controleBuscaNome" value="${esc(controleBuscaNome)}" placeholder="Digite o nome do paciente" autocomplete="off"></div><button type="button" class="btn btn-primary btn-sm" onclick="confirmarControleBusca('nome')">Pesquisar</button></div>
       </div>
     </div>
+    ${renderControleConsultaDetalhe(numeroQuery,nomeQuery)}
     ${renderControlePrazoAlert()}
     <div class="panel controle-distribuicao-panel">
       <div class="controle-heading">
@@ -3170,7 +3192,7 @@ async function submitControleDistribuicao(event){
   event.preventDefault();
   const form = event.currentTarget;
   const rawNumbers = String(form.elements.numeros?.value || '');
-  const numbers = [...new Set(rawNumbers.split(/[,;\n]+/).map(value => value.trim()).filter(Boolean))];
+  const numbers = [...new Set(rawNumbers.split(/[,;\n]+/).map(value => normalizeControleFicha(value)).filter(Boolean))];
   const destino = String(form.elements.destino?.value || '');
   const dataDistribuicao = String(form.elements.dataDistribuicao?.value || todayISO());
   if(!numbers.length){ showToast('Informe pelo menos um número de ficha.'); return; }
@@ -3185,6 +3207,7 @@ async function submitControleDistribuicao(event){
     const next = isNew ? {
       id:`cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`,
       controleFicha:true,
+      anoReferencia:'2026',
       numeroFicha:numero,
       status:'departamento_visat',
       enfermeiroResponsavel:'',
@@ -3222,27 +3245,64 @@ async function submitControleDistribuicao(event){
   }
   render();
   if(failed.length){
-    showToast(`${saved.length} ficha(s) distribuída(s); falha ao salvar: ${failed.join(', ')}.`);
+    if(saved.length) showToast(`${saved.length} ficha(s) distribuída(s); falha ao salvar: ${failed.join(', ')}.`);
+    else showToast(`Não foi possível salvar a distribuição das fichas: ${failed.join(', ')}.`);
   } else {
     showToast(`${saved.length} ficha(s) distribuída(s) para ${destino}.`);
   }
 }
+function confirmarControleBusca(tipo){
+  if(tipo === 'numero'){
+    controleBuscaNumero = String(document.getElementById('controleBuscaNumero')?.value || '').trim();
+    controleBuscaNome = '';
+    controleBuscaNumeroConfirmada = controleBuscaNumero;
+    controleBuscaNomeConfirmada = '';
+  }else{
+    controleBuscaNome = String(document.getElementById('controleBuscaNome')?.value || '').trim();
+    controleBuscaNumero = '';
+    controleBuscaNomeConfirmada = controleBuscaNome;
+    controleBuscaNumeroConfirmada = '';
+  }
+  controleConsultaDetalheAberta = true;
+  render();
+}
+function limparControleBusca(){
+  controleBuscaNumero = '';
+  controleBuscaNome = '';
+  controleBuscaNumeroConfirmada = '';
+  controleBuscaNomeConfirmada = '';
+  controleConsultaDetalheAberta = false;
+  render();
+}
+function renderControleConsultaDetalhe(numeroQuery='',nomeQuery=''){
+  if(!controleConsultaDetalheAberta || (!numeroQuery && !nomeQuery)) return '';
+  const matches = controleFichas.filter(item=>{
+    const numero = normalizeSearchText(item.numeroFicha);
+    const nome = normalizeSearchText(controleFichaPatientName(item));
+    return (!numeroQuery || numero.includes(numeroQuery)) && (!nomeQuery || nome.includes(nomeQuery));
+  });
+  const queryLabel = numeroQuery ? `Nº ${esc(numeroQuery)}` : `nome “${esc(controleBuscaNomeConfirmada)}”`;
+  const body = matches.length ? matches.map(item=>`<div class="controle-consulta-result"><div><b>Nº da Ficha ${esc(item.numeroFicha || 'S/N')}</b><span>${esc(controleFichaPatientName(item) || 'Nome não informado')}</span></div><div><strong>${esc(controleFichaResponsibleLabel(item))}</strong><span>${esc(CONTROLE_FICHA_STATUS[item.status]?.label || item.status || '—')} · ${esc(fmtDate(controleFichaStatusDate(item)))}</span></div>${controleFichaDistributionChip(item)}</div>`).join('') : `<div class="controle-consulta-empty">Nenhuma ficha com ${queryLabel} foi encontrada no fluxo de 2026. Verifique o número ou confirme se a distribuição foi salva.</div>`;
+  return `<details class="controle-consulta-details" open><summary>Onde está a ficha consultada? <span>${matches.length} resultado(s)</span></summary><div class="controle-consulta-results">${body}</div><button type="button" class="btn btn-ghost btn-sm controle-consulta-clear" onclick="limparControleBusca()">Limpar consulta</button></details>`;
+}
 function setControleTab(tab){ controleTab = tab; render(); }
 function bindControleFichasEvents(){
   const numero = document.getElementById('controleBuscaNumero');
-  if(numero) numero.addEventListener('input', event=>{
-    controleBuscaNumero = event.target.value;
-    if(controleBuscaNumero.trim()) controleBuscaNome = '';
-    render();
-    consultaInputFocus('controleBuscaNumero');
-  });
+  if(numero){
+    numero.addEventListener('input', event=>{
+      controleBuscaNumero = event.target.value;
+      if(controleBuscaNumero.trim()) controleBuscaNome = '';
+    });
+    numero.addEventListener('keydown', event=>{ if(event.key === 'Enter'){ event.preventDefault(); confirmarControleBusca('numero'); } });
+  }
   const nome = document.getElementById('controleBuscaNome');
-  if(nome) nome.addEventListener('input', event=>{
-    controleBuscaNome = event.target.value;
-    if(controleBuscaNome.trim()) controleBuscaNumero = '';
-    render();
-    consultaInputFocus('controleBuscaNome');
-  });
+  if(nome){
+    nome.addEventListener('input', event=>{
+      controleBuscaNome = event.target.value;
+      if(controleBuscaNome.trim()) controleBuscaNumero = '';
+    });
+    nome.addEventListener('keydown', event=>{ if(event.key === 'Enter'){ event.preventDefault(); confirmarControleBusca('nome'); } });
+  }
 }
 function closeControleModal(){ document.getElementById('controleModal')?.remove(); }
 function controleModalField(label,name,value,type='text',required=false){
