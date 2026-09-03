@@ -2744,16 +2744,29 @@ async function loadRecords(){
 }
 
 async function upsertRecordRemote(record){
-  try{
-    const { error } = await supabaseClient
-      .from('records')
-      .upsert({ id: record.id, data: record, updated_at: new Date().toISOString() }, { onConflict: 'id' });
-    if(error) throw error;
-    return true;
-  }catch(e){
-    console.error('Falha ao salvar no Supabase', e);
-    return false;
+  if(!supabaseClient) return false;
+  const payload = { id: record.id, data: record, updated_at: new Date().toISOString() };
+  const maxAttempts = 3;
+  const isTransient = error => {
+    const status = Number(error?.status || error?.response?.status || 0);
+    return !status || status === 408 || status === 425 || status === 429 || status >= 500;
+  };
+  for(let attempt=1; attempt<=maxAttempts; attempt++){
+    try{
+      const { error } = await supabaseClient
+        .from('records')
+        .upsert(payload, { onConflict: 'id' });
+      if(!error) return true;
+      if(!isTransient(error) || attempt === maxAttempts) throw error;
+    }catch(e){
+      if(!isTransient(e) || attempt === maxAttempts){
+        console.error('Falha ao salvar no Supabase', e);
+        return false;
+      }
+    }
+    await new Promise(resolve=>setTimeout(resolve, 350 * attempt));
   }
+  return false;
 }
 
 async function deleteRecordRemote(id){
