@@ -2731,7 +2731,7 @@ async function loadRecords(){
       if(page.length < pageSize) break;
     }
     const loaded = allRows.map(row => row.data).filter(Boolean);
-    controleFichas = dedupeControleFichas(loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord));
+    controleFichas = dedupeControleFichas(loaded.filter(isControleFichaRecord).filter(isOperationalControleFicha).map(normalizeControleFichaRecord));
     producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
     records = loaded.filter(row => !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
   }catch(e){
@@ -3006,6 +3006,19 @@ function controleFichaStorageId(item){
   const numero = normalizeControleFicha(item?.numeroFicha);
   return numero ? `cf-2026-${numero}` : (item?.storageId || `cf-${item?.id || uid()}`);
 }
+function controleFichaYear(item){
+  if(item?.anoReferencia) return String(item.anoReferencia);
+  const idYear = String(item?.id || '').match(/^cf-(20\d{2})-/i);
+  if(idYear) return idYear[1];
+  const date = item?.dataRecebimentoEpidemio || item?.dataStatusAtual || item?.dataDistribuicao || '';
+  return String(date).slice(0,4);
+}
+function isOperationalControleFicha(item){
+  return controleFichaYear(item) === OPERATIONAL_YEAR;
+}
+function operationalControleFichas(){
+  return controleFichas.filter(isOperationalControleFicha);
+}
 function dedupeControleFichas(items){
   const byNumber = new Map();
   items.forEach(item=>{
@@ -3020,7 +3033,7 @@ function dedupeControleFichas(items){
 function findLinkedRecord(numero){
   const key = normalizeControleFicha(numero);
   if(!key) return null;
-  return records.find(r => normalizeControleFicha(r.fichaNumero) === key) || null;
+  return operationalRecords().find(r => normalizeControleFicha(r.fichaNumero) === key) || null;
 }
 function controleFichaStatusDate(item){
   if(item.status === 'devolvida') return item.dataDevolucaoEpidemio || item.dataStatusAtual || item.dataRecebimentoEpidemio;
@@ -3043,7 +3056,7 @@ function controleFichaTabMatches(item, tab){
   if(tab === 'devolvida') return item.status === 'devolvida';
   return true;
 }
-function controleFichaCount(tab){ return controleFichas.filter(item => controleFichaTabMatches(item, tab)).length; }
+function controleFichaCount(tab){ return operationalControleFichas().filter(item => controleFichaTabMatches(item, tab)).length; }
 function controleFichaPatientName(item){
   const linked = findLinkedRecord(item?.numeroFicha);
   return linked?.patientName || item?.patientName || item?.nomePaciente || '';
@@ -3057,7 +3070,7 @@ function controleFichaResponsibleLabel(item){
   return item?.enfermeiroResponsavel || 'Sem responsável';
 }
 function renderControlePrazoAlert(){
-  const overdue = controleFichas.filter(controleFichaIsOverdue);
+  const overdue = operationalControleFichas().filter(controleFichaIsOverdue);
   if(!overdue.length) return '<div class="controle-prazo-alert controle-prazo-ok"><b>Prazo em dia</b><span>Nenhuma ficha em aberto está há mais de 15 dias com o responsável.</span><small>Fichas na Epidemiologia são consideradas finalizadas e não entram neste alerta.</small></div>';
   const byResponsible = overdue.reduce((groups,item)=>{
     const key = controleFichaResponsibleLabel(item);
@@ -3070,7 +3083,7 @@ function renderControlePrazoAlert(){
 function findControleFichaByNumero(numero){
   const key = normalizeControleFicha(numero);
   if(!key) return null;
-  return controleFichas.find(item => normalizeControleFicha(item.numeroFicha) === key) || null;
+  return operationalControleFichas().find(item => normalizeControleFicha(item.numeroFicha) === key) || null;
 }
 function controleFichaDistributionLabel(item){
   if(!item) return '';
@@ -3124,7 +3137,7 @@ function renderControleFichas(){
   const currentTab = tabs.some(([key])=>key===controleTab) ? controleTab : 'todas';
   const numeroQuery = normalizeSearchText(controleBuscaNumeroConfirmada).trim();
   const nomeQuery = normalizeSearchText(controleBuscaNomeConfirmada).trim();
-  const list = controleFichas
+  const list = operationalControleFichas()
     .filter(item=>controleFichaTabMatches(item,currentTab))
     .filter(item=>{
       const numero = normalizeSearchText(item.numeroFicha);
@@ -3200,9 +3213,15 @@ async function submitControleDistribuicao(event){
   const targetStatus = destino === 'Epidemiologia' ? 'devolvida' : destino === 'Departamento VISAT' ? 'departamento_visat' : 'com_enfermeiro';
   const saved = [];
   const failed = [];
+  const rejected = [];
   for(const numero of numbers){
     const current = findControleFichaByNumero(numero);
+    const linked = findLinkedRecord(numero);
     const isNew = !current;
+    if(!current && !linked){
+      rejected.push(numero);
+      continue;
+    }
     const now = new Date().toISOString();
     const next = isNew ? {
       id:`cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`,
@@ -3244,9 +3263,11 @@ async function submitControleDistribuicao(event){
     } else failed.push(numero);
   }
   render();
-  if(failed.length){
-    if(saved.length) showToast(`${saved.length} ficha(s) distribuída(s); falha ao salvar: ${failed.join(', ')}.`);
-    else showToast(`Não foi possível salvar a distribuição das fichas: ${failed.join(', ')}.`);
+  if(failed.length || rejected.length){
+    const messages = [];
+    if(failed.length) messages.push(`falha ao salvar: ${failed.join(', ')}`);
+    if(rejected.length) messages.push(`fora do fluxo de 2026 ou inexistentes: ${rejected.join(', ')}`);
+    showToast(`${saved.length ? `${saved.length} ficha(s) distribuída(s); ` : ''}${messages.join('; ')}.`);
   } else {
     showToast(`${saved.length} ficha(s) distribuída(s) para ${destino}.`);
   }
@@ -3276,7 +3297,7 @@ function limparControleBusca(){
 }
 function renderControleConsultaDetalhe(numeroQuery='',nomeQuery=''){
   if(!controleConsultaDetalheAberta || (!numeroQuery && !nomeQuery)) return '';
-  const matches = controleFichas.filter(item=>{
+  const matches = operationalControleFichas().filter(item=>{
     const numero = normalizeSearchText(item.numeroFicha);
     const nome = normalizeSearchText(controleFichaPatientName(item));
     return (!numeroQuery || numero.includes(numeroQuery)) && (!nomeQuery || nome.includes(nomeQuery));
@@ -3371,6 +3392,7 @@ function openControleModal(mode,id=''){
     const next = isNew ? {
       id:`cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`,
       controleFicha:true,
+      anoReferencia:OPERATIONAL_YEAR,
       numeroFicha:numero || 'S/N',
       status:'departamento_visat',
       enfermeiroResponsavel:'',
@@ -3381,7 +3403,7 @@ function openControleModal(mode,id=''){
       observacoes:String(data.get('observacoes')||'').trim(),
       historico:[],
       createdAt:new Date().toISOString(),
-    } : {...item, numeroFicha:numero || 'S/N', dataRecebimentoEpidemio:String(data.get('dataRecebimento')||item.dataRecebimentoEpidemio||todayISO()), observacoes:String(data.get('observacoes')||'').trim()};
+    } : {...item, anoReferencia:OPERATIONAL_YEAR, numeroFicha:numero || 'S/N', dataRecebimentoEpidemio:String(data.get('dataRecebimento')||item.dataRecebimentoEpidemio||todayISO()), observacoes:String(data.get('observacoes')||'').trim()};
     if(await upsertControleFichaRemote(next)){ if(isNew) controleFichas.push(next); else controleFichas = controleFichas.map(x=>x.id===item.id?next:x); closeControleModal(); render(); showToast(isNew?'Entrada registrada.':'Entrada corrigida.'); }
     else showToast('Não foi possível salvar a entrada.');
   });
@@ -3407,10 +3429,6 @@ const APP_SHELL_HTML = `
     <div class="nav-item nav-subitem" data-view="producaoDepartamento"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>Departamento VISAT</div>
     <div class="nav-item nav-subitem" data-view="producaoJulio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3"/><path d="M5 20c.7-3.2 3.1-5 7-5s6.3 1.8 7 5"/></svg>Julio Cesar</div>
     <div class="nav-item nav-subitem" data-view="producaoLuciane"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3"/><path d="M5 20c.7-3.2 3.1-5 7-5s6.3 1.8 7 5"/></svg>Luciane Manhães</div>
-    <div class="nav-group-title">Anos anteriores</div>
-    <div class="nav-item nav-subitem" data-view="analytics2025"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>Dashboard 2025</div>
-    <div class="nav-item nav-subitem" data-view="analytics2024"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>Dashboard 2024</div>
-    <div class="nav-item nav-subitem" data-view="comparison"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16"/><path d="M8 15l3-4 3 2 4-6"/></svg>Comparativo anual</div>
     <div class="foot" id="sidebarFoot">4 fichas oficiais do SINAN implementadas: Acidente Grave, Exposição a Material Biológico, Transtorno Mental e LER/DORT.</div>
   </aside>
 
@@ -3659,8 +3677,21 @@ function goTo(v, id){
   if(v==='producaoDepartamento') producaoView = 'departamento';
   else if(v==='producaoJulio') producaoView = 'julio';
   else if(v==='producaoLuciane') producaoView = 'luciane';
-  if(v==='analytics2025' || v==='analytics2024') analyticsCardFilter = null;
+  if(v==='analytics2025' || v==='analytics2024' || v==='comparison'){
+    analyticsCardFilter = null;
+    view = 'analytics';
+    v = 'analytics';
+  }
   if(v==='form'){
+    if(id){
+      const existingRecord = records.find(r=>r.id===id);
+      if(existingRecord && yearFromRecord(existingRecord) !== OPERATIONAL_YEAR){
+        showToast('Fichas de 2024 e 2025 ficam fora do fluxo operacional de 2026.');
+        view = 'analytics';
+        render();
+        return;
+      }
+    }
     editingId = id || null;
     formPage = 1;
     const existing = id ? records.find(r=>r.id===id) : null;
@@ -3681,9 +3712,6 @@ function render(){
   const titles = {
     dashboard:['Painel','Visão geral das notificações e pendências — registros de 2026'],
     analytics:['Dashboard Analítico','Painel de Controle de Acidentes e Agravos Relacionados ao Trabalho — 2026'],
-    analytics2025:['Dashboard 2025','Painel anual independente de 2025'],
-    analytics2024:['Dashboard 2024','Painel anual independente de 2024'],
-    comparison:['Comparativo anual','Comparação dos indicadores por ano'],
     consulta:['Consulta de Fichas','Buscar, filtrar e gerenciar notificações registradas — 2026'],
     controleFichas:['Controle de Fichas','Fluxo de recebimento, atribuição e devolução — Epidemiologia / VISAT'],
     producaoDepartamento:['Produção Mensal','Totalização do Departamento de Vigilância e Saúde do Trabalhador'],
@@ -3698,9 +3726,6 @@ function render(){
   const c = document.getElementById('content');
   if(view==='dashboard') c.innerHTML = renderDashboard();
   else if(view==='analytics') c.innerHTML = renderAnalytics('2026');
-  else if(view==='analytics2025') c.innerHTML = renderAnalytics('2025');
-  else if(view==='analytics2024') c.innerHTML = renderAnalytics('2024');
-  else if(view==='comparison') c.innerHTML = renderAnnualComparison();
   else if(view==='consulta') c.innerHTML = renderConsulta();
   else if(view==='controleFichas') c.innerHTML = renderControleFichas();
   else if(view==='producaoDepartamento') c.innerHTML = renderProducaoMensal();
@@ -3717,7 +3742,7 @@ function render(){
   }
   if(view==='consulta') bindConsultaEvents();
   if(view==='controleFichas') bindControleFichasEvents();
-  if(view==='analytics' || view==='analytics2025' || view==='analytics2024') bindAnalyticsEvents();
+  if(view==='analytics') bindAnalyticsEvents();
 }
 
 /* ============================= DASHBOARD ANALÍTICO ============================= */
@@ -6631,6 +6656,11 @@ function handleAutocomplete(input){
 
 async function saveRecord(){
   syncFormFromDOM();
+  if(yearFromRecord(formData) !== OPERATIONAL_YEAR){
+    showToast('Somente fichas de 2026 podem ser salvas no fluxo principal.');
+    return;
+  }
+  formData.anoReferencia = OPERATIONAL_YEAR;
   applyInvestigatorDefaults();
   const duplicateMatches = isEditingExistingRecord() ? [] : refreshDuplicateValidation();
   if(duplicateMatches.some(match=>match.byNumber || match.byNameDate)){
