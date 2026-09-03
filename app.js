@@ -3429,6 +3429,10 @@ const APP_SHELL_HTML = `
     <div class="nav-item nav-subitem" data-view="producaoDepartamento"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>Departamento VISAT</div>
     <div class="nav-item nav-subitem" data-view="producaoJulio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3"/><path d="M5 20c.7-3.2 3.1-5 7-5s6.3 1.8 7 5"/></svg>Julio Cesar</div>
     <div class="nav-item nav-subitem" data-view="producaoLuciane"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3"/><path d="M5 20c.7-3.2 3.1-5 7-5s6.3 1.8 7 5"/></svg>Luciane Manhães</div>
+    <div class="nav-group-title">Anos anteriores</div>
+    <div class="nav-item nav-subitem" data-view="analytics2025"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>Dashboard 2025</div>
+    <div class="nav-item nav-subitem" data-view="analytics2024"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>Dashboard 2024</div>
+    <div class="nav-item nav-subitem" data-view="comparison"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16"/><path d="M8 15l3-4 3 2 4-6"/></svg>Comparativo anual</div>
     <div class="foot" id="sidebarFoot">4 fichas oficiais do SINAN implementadas: Acidente Grave, Exposição a Material Biológico, Transtorno Mental e LER/DORT.</div>
   </aside>
 
@@ -3677,11 +3681,7 @@ function goTo(v, id){
   if(v==='producaoDepartamento') producaoView = 'departamento';
   else if(v==='producaoJulio') producaoView = 'julio';
   else if(v==='producaoLuciane') producaoView = 'luciane';
-  if(v==='analytics2025' || v==='analytics2024' || v==='comparison'){
-    analyticsCardFilter = null;
-    view = 'analytics';
-    v = 'analytics';
-  }
+  if(v==='analytics2025' || v==='analytics2024' || v==='comparison') analyticsCardFilter = null;
   if(v==='form'){
     if(id){
       const existingRecord = records.find(r=>r.id===id);
@@ -3712,6 +3712,9 @@ function render(){
   const titles = {
     dashboard:['Painel','Visão geral das notificações e pendências — registros de 2026'],
     analytics:['Dashboard Analítico','Painel de Controle de Acidentes e Agravos Relacionados ao Trabalho — 2026'],
+    analytics2025:['Dashboard 2025','Painel anual independente de 2025'],
+    analytics2024:['Dashboard 2024','Painel anual independente de 2024'],
+    comparison:['Comparativo anual','Comparação dos indicadores por ano'],
     consulta:['Consulta de Fichas','Buscar, filtrar e gerenciar notificações registradas — 2026'],
     controleFichas:['Controle de Fichas','Fluxo de recebimento, atribuição e devolução — Epidemiologia / VISAT'],
     producaoDepartamento:['Produção Mensal','Totalização do Departamento de Vigilância e Saúde do Trabalhador'],
@@ -3726,6 +3729,9 @@ function render(){
   const c = document.getElementById('content');
   if(view==='dashboard') c.innerHTML = renderDashboard();
   else if(view==='analytics') c.innerHTML = renderAnalytics('2026');
+  else if(view==='analytics2025') c.innerHTML = renderAnalytics('2025');
+  else if(view==='analytics2024') c.innerHTML = renderAnalytics('2024');
+  else if(view==='comparison') c.innerHTML = renderAnnualComparison();
   else if(view==='consulta') c.innerHTML = renderConsulta();
   else if(view==='controleFichas') c.innerHTML = renderControleFichas();
   else if(view==='producaoDepartamento') c.innerHTML = renderProducaoMensal();
@@ -3742,7 +3748,7 @@ function render(){
   }
   if(view==='consulta') bindConsultaEvents();
   if(view==='controleFichas') bindControleFichasEvents();
-  if(view==='analytics') bindAnalyticsEvents();
+  if(view==='analytics' || view==='analytics2025' || view==='analytics2024') bindAnalyticsEvents();
 }
 
 /* ============================= DASHBOARD ANALÍTICO ============================= */
