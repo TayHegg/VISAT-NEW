@@ -2705,6 +2705,7 @@ const PRODUCAO_SIA_SUS_CODES = [
   ['01.02.02.001-9','Vigilância da situação de saúde dos trabalhadores'],
   ['01.02.02.002-7','Atividade de educação em saúde do trabalhador'],
   ['01.02.02.003-5','Inspeção sanitária em saúde do trabalhador'],
+  ['01.02.03.001-4','Aplicação de Vacinas'],
 ];
 
 /* ============================= SUPABASE ============================= */

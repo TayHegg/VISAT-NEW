@@ -35,9 +35,10 @@ const sandbox = {
 vm.runInNewContext(`${source.slice(start, end)}; globalThis.result = { codes: PRODUCAO_SIA_SUS_CODES, total: producaoTotal, codesFrom: producaoCodes, summary: producaoSummaryByCode, filtered: producaoFilteredItems };`, sandbox);
 const result = sandbox.result;
 
-assert.equal(result.codes.length, 22, 'o mapa deve conter 22 códigos SIA/SUS');
+assert.equal(result.codes.length, 23, 'o mapa deve conter 23 códigos SIA/SUS');
 assert.equal(result.codes[0][0], '03.01.02.004-3');
 assert.match(result.codes[0][1], /Investigação epidemiológica/i);
+assert.deepEqual(Array.from(result.codes.find(([code]) => code === '01.02.03.001-4')), ['01.02.03.001-4', 'Aplicação de Vacinas']);
 assert.deepEqual(Array.from(result.codesFrom({codigoSiaSus: '01.02.02.001-9, 01.02.02.002-7'})), ['01.02.02.001-9', '01.02.02.002-7']);
 assert.equal(result.total([{quantidade: 2}, {quantidade: 3}]), 5);
 
