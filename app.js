@@ -2736,6 +2736,8 @@ async function loadRecords(){
     const loaded = allRows.map(row => row.data).filter(Boolean);
     controleFichas = dedupeControleFichas(loaded.filter(isControleFichaRecord).filter(isOperationalControleFicha).map(normalizeControleFichaRecord));
     producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
+    const latestProductionMonth = producaoLatestMonth(producaoMensal);
+    if(latestProductionMonth && !producaoMensal.some(item=>producaoMonth(item.data) === producaoMonth(producaoMesFiltro))) producaoMesFiltro = latestProductionMonth;
     records = loaded.filter(row => !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
   }catch(e){
     console.error('Falha ao carregar registros do Supabase', e);
@@ -2806,6 +2808,9 @@ async function deleteProducaoRemote(item){
 
 /* ============================= PRODUÇÃO MENSAL ============================= */
 function producaoMonth(value){ return String(value || '').slice(0,7); }
+function producaoLatestMonth(items){
+  return [...new Set((items || []).map(item=>producaoMonth(item?.data)).filter(Boolean))].sort().pop() || '';
+}
 function producaoCodes(item){
   const raw = Array.isArray(item?.codigoSiaSus) ? item.codigoSiaSus : String(item?.codigoSiaSus || '').split(/[,;\n]+/);
   return raw.map(code=>String(code).trim()).filter(Boolean);
