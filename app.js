@@ -2874,6 +2874,7 @@ function captureProducaoDraft(){
     enderecoMeioComunicacao:String(data.get(`enderecoMeioComunicacao_${index}`) || '').trim(),
     atividade:String(data.get(`atividade_${index}`) || '').trim(),
     codigoSiaSus:String(data.get(`codigoSiaSus_${index}`) || '').trim(),
+    pessoasAlcancadas:Math.max(1, Number(data.get(`pessoasAlcancadas_${index}`)) || 1),
     autosSituacao:String(data.get(`autosSituacao_${index}`) || '').trim(),
     ordemFiscalizacao:String(data.get(`ordemFiscalizacao_${index}`) || '').trim(),
     areaAtuacao:String(data.get(`areaAtuacao_${index}`) || '').trim(),
@@ -2891,7 +2892,7 @@ function captureProducaoDraft(){
 function addProducaoAtividade(){
   captureProducaoDraft();
   if(!producaoFormDraft) return;
-  producaoFormDraft.atividades.push({processoEmpresaContribuinte:'',enderecoMeioComunicacao:'',atividade:'',codigoSiaSus:'',autosSituacao:'',ordemFiscalizacao:'',areaAtuacao:'',chefia:''});
+  producaoFormDraft.atividades.push({processoEmpresaContribuinte:'',enderecoMeioComunicacao:'',atividade:'',codigoSiaSus:'',pessoasAlcancadas:1,autosSituacao:'',ordemFiscalizacao:'',areaAtuacao:'',chefia:''});
   producaoAtividadesDraft = producaoFormDraft.atividades;
   render();
 }
@@ -2903,7 +2904,7 @@ function removeProducaoAtividade(index){
   render();
 }
 function renderProducaoForm(){
-  const draft = producaoFormDraft || {data:todayISO(),responsavel:producaoFormOwner || '',tipoServico:'',quantidade:1,atividades:producaoAtividadesDraft.length ? producaoAtividadesDraft : [{processoEmpresaContribuinte:'',enderecoMeioComunicacao:'',atividade:'',codigoSiaSus:'',autosSituacao:'',ordemFiscalizacao:'',areaAtuacao:'',chefia:''}]};
+  const draft = producaoFormDraft || {data:todayISO(),responsavel:producaoFormOwner || '',tipoServico:'',quantidade:1,atividades:producaoAtividadesDraft.length ? producaoAtividadesDraft : [{processoEmpresaContribuinte:'',enderecoMeioComunicacao:'',atividade:'',codigoSiaSus:'',pessoasAlcancadas:1,autosSituacao:'',ordemFiscalizacao:'',areaAtuacao:'',chefia:''}]};
   producaoAtividadesDraft = draft.atividades;
   const ownerOptions = producaoPeopleList().map(owner=>`<option value="${esc(owner)}" ${owner===draft.responsavel?'selected':''}>${esc(owner)}</option>`).join('');
   const codeOptions = PRODUCAO_SIA_SUS_CODES.map(([code,description])=>`<option value="${esc(code)}">${esc(code)} — ${esc(description)}</option>`).join('');
@@ -2915,6 +2916,7 @@ function renderProducaoForm(){
       <div class="field producao-field-wide"><label>Endereço / Meio de Comunicação</label><input name="enderecoMeioComunicacao_${index}" type="text" value="${esc(activity.enderecoMeioComunicacao)}" placeholder="Endereço, telefone, e-mail ou outro meio de comunicação" oninput="captureProducaoDraft()"></div>
       <div class="field"><label>Atividade <span class="req">*</span></label><input name="atividade_${index}" type="text" value="${esc(activity.atividade)}" placeholder="Descreva a atividade realizada" required oninput="captureProducaoDraft()"></div>
       <div class="field"><label>Código SIA/SUS</label><input name="codigoSiaSus_${index}" type="text" value="${esc(activity.codigoSiaSus)}" list="producaoCodigos" placeholder="Código" oninput="captureProducaoDraft()"></div>
+      <div class="field"><label>Pessoas alcançadas</label><input name="pessoasAlcancadas_${index}" type="number" min="1" step="1" value="${esc(activity.pessoasAlcancadas || activity.quantidade || 1)}" placeholder="Ex.: 99" oninput="captureProducaoDraft()"><div class="hint">Quantidade de pessoas beneficiadas.</div></div>
       <div class="field"><label>Autos / Situação</label><input name="autosSituacao_${index}" type="text" value="${esc(activity.autosSituacao)}" placeholder="Autos ou situação" oninput="captureProducaoDraft()"></div>
       <div class="field"><label>Ordem de Fiscalização</label><input name="ordemFiscalizacao_${index}" type="text" value="${esc(activity.ordemFiscalizacao)}" placeholder="Ordem de fiscalização" oninput="captureProducaoDraft()"></div>
       <div class="field"><label>Área de Atuação</label><input name="areaAtuacao_${index}" type="text" value="${esc(activity.areaAtuacao)}" placeholder="Área de atuação" oninput="captureProducaoDraft()"></div>
@@ -2956,7 +2958,7 @@ function renderProducaoMensal(owner=''){
     <div class="producao-view-tabs"><button class="producao-view-tab ${activeView==='departamento'?'active':''}" onclick="setProducaoView('departamento')">Departamento</button>${peopleTabs}<button class="producao-view-tab producao-add-tab" title="Adicionar pessoa ou área" onclick="adicionarPessoaProducao()">+</button></div>
     <div class="panel producao-filter-panel"><div class="field"><label for="producaoMesFiltro">Mês de referência</label><input id="producaoMesFiltro" type="month" value="${esc(producaoMesFiltro)}" onchange="setProducaoMesFiltro(this.value)"></div><div class="hint">A produção é contabilizada pela data do lançamento.</div></div>
     <div class="grid-stats producao-stats"><div class="stat-card primary"><div class="n">${departmentTotal}</div><div class="l">Total do Departamento</div><div class="stat-sub">Vigilância e Saúde do Trabalhador</div></div><div class="stat-card amber"><div class="n">${julioTotal}</div><div class="l">Julio Cesar</div></div><div class="stat-card green"><div class="n">${lucianeTotal}</div><div class="l">Luciane Manhães</div></div></div>
-    <div class="panel"><div class="producao-section-heading"><div><h2>${esc(scopeLabel)} — ${esc(monthLabel)}</h2><div class="hint">${items.length} lançamento(s) · ${producaoTotal(items)} unidade(s) contabilizada(s).</div></div></div>${items.length ? `<div class="table-scroll"><table class="producao-table"><thead><tr><th>Data</th><th>Responsável</th><th>Processo / Empresa / Contribuinte</th><th>Endereço / Meio de Comunicação</th><th>Atividade</th><th>Código SIA/SUS</th><th>Autos / Situação</th><th>Ordem de Fiscalização</th><th>Área de Atuação</th><th>Chefias</th><th>Qtd.</th><th>Ações</th></tr></thead><tbody>${items.map(item=>renderProducaoRow(item)).join('')}</tbody></table></div>` : `<div class="empty-state"><div style="font-size:38px;color:var(--border);margin-bottom:8px">—</div><b>Nenhuma produção lançada neste mês</b><div style="margin-top:5px">Use “Nova Produção” para registrar uma atividade.</div></div>`}</div>
+    <div class="panel"><div class="producao-section-heading"><div><h2>${esc(scopeLabel)} — ${esc(monthLabel)}</h2><div class="hint">${items.length} lançamento(s) · ${producaoTotal(items)} pessoa(s) alcançada(s).</div></div></div>${items.length ? `<div class="table-scroll"><table class="producao-table"><thead><tr><th>Data</th><th>Responsável</th><th>Processo / Empresa / Contribuinte</th><th>Endereço / Meio de Comunicação</th><th>Atividade</th><th>Código SIA/SUS</th><th>Autos / Situação</th><th>Ordem de Fiscalização</th><th>Área de Atuação</th><th>Chefias</th><th>Pessoas alcançadas</th><th>Ações</th></tr></thead><tbody>${items.map(item=>renderProducaoRow(item)).join('')}</tbody></table></div>` : `<div class="empty-state"><div style="font-size:38px;color:var(--border);margin-bottom:8px">—</div><b>Nenhuma produção lançada neste mês</b><div style="margin-top:5px">Use “Nova Produção” para registrar uma atividade.</div></div>`}</div>
     <div class="panel"><div class="producao-section-heading"><div><h2>Resumo por código SIA/SUS</h2><div class="hint">Contagem dos lançamentos da visão atual.</div></div></div>${codeSummary.length ? `<div class="producao-code-summary">${codeSummary.map(([code,total])=>`<div class="producao-code-row"><div><b>${esc(code)}</b><span>${esc(producaoDescription(code) || 'Código informado no lançamento')}</span></div><strong>${total}</strong></div>`).join('')}</div>` : `<div class="empty-state compact">Nenhum código contabilizado neste mês.</div>`}</div>
   </div>`;
 }
@@ -3064,7 +3066,8 @@ function isProducaoMensalRecord(r){
 function normalizeProducaoRecord(r){
   const item = {...r, producaoMensal:true};
   if(!item.id) item.id = uid();
-  item.quantidade = Math.max(1, Number(item.quantidade) || 1);
+  item.pessoasAlcancadas = Math.max(1, Number(item.pessoasAlcancadas) || Number(item.quantidade) || 1);
+  item.quantidade = item.pessoasAlcancadas;
   item.data = String(item.data || '').trim();
   item.responsavel = String(item.responsavel || '').trim();
   item.tipoServico = String(item.tipoServico || '').trim();

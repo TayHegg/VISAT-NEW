@@ -40,6 +40,7 @@ assert.equal(result.codes[0][0], '03.01.02.004-3');
 assert.match(result.codes[0][1], /Investigação epidemiológica/i);
 assert.deepEqual(Array.from(result.codes.find(([code]) => code === '01.02.03.001-4')), ['01.02.03.001-4', 'Aplicação de Vacinas']);
 assert.equal(result.latestMonth([{data:'2026-08-19'}, {data:'2026-09-01'}, {data:'2026-08-20'}]), '2026-09');
+assert.equal(result.total([{atividade:'Vacinação', pessoasAlcancadas:99, quantidade:99}]), 99);
 assert.deepEqual(Array.from(result.codesFrom({codigoSiaSus: '01.02.02.001-9, 01.02.02.002-7'})), ['01.02.02.001-9', '01.02.02.002-7']);
 assert.equal(result.total([{quantidade: 2}, {quantidade: 3}]), 5);
 
