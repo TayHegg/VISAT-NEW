@@ -3681,7 +3681,7 @@ const REQUIRED_GRAVE = ['dataAcidente','municipioOcorrencia','ufOcorrencia','tip
 const REQUIRED_LERDORT = ['dataDiagnosticoLD','regimeTratamentoLD'];
 const REQUIRED_MENTAL = ['dataDiagnosticoMental','regimeTratamentoMental'];
 const REQUIRED_BIOLOGICO = ['dataAcidenteBio','tipoExposicao','materialOrganico'];
-
+const VALID_CAT_VALUES = ['1','2','3','9'];
 function isEmpty(v){ return v==null || v==='' || (Array.isArray(v) && v.length===0); }
 // Registros importados das planilhas oficiais representam fichas já
 // encerradas na origem. Eles continuam com os dados originais, mas não devem
@@ -3704,8 +3704,8 @@ function computeAlerts(r){
   if(missingCommon.length || missingType.length){
     alerts.push({level:'red', code:'campos_obrigatorios', label:`${missingCommon.length + missingType.length} campo(s) obrigatório(s) vazio(s)`});
   }
-  if(r.foiEmitidaCAT === '2'){
-    alerts.push({level:'red', code:'cat', label:'CAT não emitida'});
+  if(!VALID_CAT_VALUES.includes(String(r.foiEmitidaCAT || ''))){
+    alerts.push({level:'red', code:'cat', label:'Emissão da CAT não informada'});
   }
   if(r.agravoType === 'grave'){
     if(isEmpty(r.diagnosticoLesaoCID10) && isEmpty(r.causaCID10)){
@@ -4013,7 +4013,7 @@ function getMissingDataLabels(r){
   const missing = getRequiredFieldsForRecord(r)
     .filter(field => isEmpty(r[field]))
     .map(field => REQUIRED_FIELD_LABELS[field] || field);
-  if(r.foiEmitidaCAT === '2') missing.push('Emissão da CAT');
+  if(!VALID_CAT_VALUES.includes(String(r.foiEmitidaCAT || ''))) missing.push('Emissão da CAT');
   if(r.agravoType === 'grave'){
     if(isEmpty(r.diagnosticoLesaoCID10) && isEmpty(r.causaCID10)) missing.push('CID ou causa da lesão');
     if(isEmpty(r.investigadorNome)) missing.push('Nome do investigador');
