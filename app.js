@@ -6071,7 +6071,14 @@ async function previewCurrentPdf(){
     kind = pdfAttachmentState.file.type || 'application/pdf';
     name = pdfAttachmentState.file.name || 'ficha.pdf';
   }else if(pdfAttachmentState.attachment){
-    url = await getPdfAttachmentUrl(pdfAttachmentState.attachment);
+    try{
+      const browserFile = await getPdfBrowserUrl(pdfAttachmentState.attachment);
+      url = browserFile.url;
+      revoke = browserFile.revoke;
+    }catch(error){
+      showToast(error.message || 'Não foi possível preparar o PDF para visualização.');
+      return;
+    }
     kind = pdfAttachmentState.attachment.contentType || 'application/pdf';
     name = pdfAttachmentState.attachment.name || 'ficha.pdf';
   }else{
@@ -6121,14 +6128,29 @@ async function getPdfAttachmentUrl(attachment){
   }
   return attachment.url || '';
 }
+async function getPdfBrowserUrl(attachment){
+  if(attachment?.mode === 'record' && attachment.dataUrl){
+    const response = await fetch(attachment.dataUrl);
+    if(!response.ok) throw new Error('Não foi possível preparar o PDF para visualização.');
+    const blob = await response.blob();
+    return {url:URL.createObjectURL(blob), revoke:true};
+  }
+  return {url:await getPdfAttachmentUrl(attachment), revoke:false};
+}
 async function openPdfForRecord(id){
   const record = records.find(r=>r.id===id);
   if(!record?.pdfFicha){ showToast('Esta ficha não possui PDF anexado.'); return; }
   const tab = window.open('about:blank', '_blank');
   if(!tab){ showToast('O navegador bloqueou a nova aba. Permita pop-ups para abrir o PDF.'); return; }
-  const url = await getPdfAttachmentUrl(record.pdfFicha);
-  if(!url){ tab.close(); showToast('Não foi possível abrir o PDF anexado.'); return; }
-  tab.location.href = url;
+  try{
+    const result = await getPdfBrowserUrl(record.pdfFicha);
+    if(!result.url){ tab.close(); showToast('Não foi possível abrir o PDF anexado.'); return; }
+    tab.location.href = result.url;
+    if(result.revoke) setTimeout(()=>URL.revokeObjectURL(result.url), 120000);
+  }catch(error){
+    tab.close();
+    showToast(error.message || 'Não foi possível abrir o PDF anexado.');
+  }
 }
 
 function checkboxGroup(opts){
