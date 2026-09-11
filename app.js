@@ -4031,8 +4031,10 @@ function normalizeUnidadeSaude(value){
   const raw = String(value || '').trim();
   if(!raw) return 'Não informado';
   const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
-  if(normalized.includes('PSMRO') || normalized.includes('PRONTO SOCORRO') || normalized.includes('PONTO SOCORRO')) return 'Pronto Socorro (PSMRO)';
-  if(/\bUPA\b/.test(normalized)) return 'UPA';
+  if(normalized === 'UPA' || normalized.includes('VALMIR HESP') || normalized.includes('VALMIR ESP')) return 'UPA';
+  if(['PMRO','PRMRO','PSMRS','PSRMO','PSRO','PRONTO SOCORRO','PRONTO SOCORRO (PSMRO)','PRONTO SOCORRO - PSMRO'].includes(normalized) || normalized.includes('PSMRO')) return 'PRONTO SOCORRO - PSMRO';
+  if(['HMNM','HM NOELMA MONTEIRO','HOSPITAL MUNICIPAL','H.M. NELMA MONTEIRO','HM DOUTORA NAELMA','HOSPITAL MUNICIPAL DRA. NOELMA MONTEIRO'].includes(normalized) || normalized.includes('NOELMA') || normalized.includes('NAELMA')) return 'HOSPITAL MUNICIPAL DRA. NOELMA MONTEIRO';
+  if(normalized.includes('CIDADE PRAIANA')) return 'ESF CIDADE PRAIANA';
   return raw;
 }
 
@@ -5163,7 +5165,7 @@ function field(opts){
     ${duplicateHint}
   </div>`;
 }
-const UNIDADE_SAUDE_OPTIONS = ['UPA','PRONTO SOCORRO','HOSPITAL MUNICIPAL NOELMA MONTEIRO','ESF CIDADE PRAIANA','VISAT','OUTRO'];
+const UNIDADE_SAUDE_OPTIONS = ['UPA','PRONTO SOCORRO - PSMRO','HOSPITAL MUNICIPAL DRA. NOELMA MONTEIRO','ESF CIDADE PRAIANA','VISAT','OUTRO'];
 function unidadeSaudeField(){
   const current = String(formData.unidadeSaude || '').trim();
   const isPreset = UNIDADE_SAUDE_OPTIONS.slice(0,-1).includes(current);
@@ -6811,6 +6813,7 @@ async function saveRecord(){
   formData.ufNotificacao = 'RJ';
   formData.municipioOcorrencia = 'Rio das Ostras';
   formData.ufOcorrencia = 'RJ';
+  formData.unidadeSaude = normalizeUnidadeSaude(formData.unidadeSaude);
   if(formData.status === 'finalizado') formData.ocorreuAtendimentoMedico = '1';
   applyInvestigatorDefaults();
   const duplicateMatches = isEditingExistingRecord() ? [] : refreshDuplicateValidation();
