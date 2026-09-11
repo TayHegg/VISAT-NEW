@@ -5249,6 +5249,29 @@ function renderPdfAutoSummary(){
     ${warning}
   </div>`;
 }
+function renderPdfUpload(){
+  const attachment = pdfAttachmentState.attachment;
+  const selected = pdfAttachmentState.file;
+  const canPreview = Boolean(selected || attachment);
+  const status = pdfAttachmentState.error
+    ? pdfAttachmentState.error
+    : selected
+      ? `PDF selecionado: ${selected.name} (${formatFileSize(selected.size)}). Será enviado ao salvar.`
+      : attachment
+        ? `PDF anexado: ${attachment.name || 'ficha.pdf'}. O vínculo será mantido ao salvar.`
+        : 'Faça o upload do PDF oficial da ficha para anexá-lo. A leitura deverá ser feita manualmente.';
+  return `<div class="field pdf-upload span2">
+    <label for="pdfFichaInput">Arquivo PDF da Ficha</label>
+    <div class="pdf-actions no-print">
+      <input id="pdfFichaInput" type="file" accept="application/pdf,.pdf" aria-label="Selecionar PDF da ficha">
+      <button type="button" class="btn btn-primary btn-sm pdf-upload-btn" onclick="document.getElementById('pdfFichaInput').click()">Upload de Ficha</button>
+      <button type="button" class="btn btn-ghost btn-sm pdf-view-btn" onclick="previewCurrentPdf()" ${canPreview?'':'disabled'}>${pdfPreviewState.open?'Fechar visualização':'Visualizar ficha'}</button>
+    </div>
+    <span class="hint ${pdfAttachmentState.error?'pdf-error':''}" id="pdfFichaStatus">${esc(status)}</span>
+    <div id="pdfPreviewPanelHost">${renderPdfPreviewPanel()}</div>
+    ${attachment ? `<div class="pdf-existing no-print"><span>Arquivo já vinculado a esta ficha.</span><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(formData.id)}')">Abrir PDF salvo</button></div>` : ''}
+  </div>`;
+}
 function formatFileSize(bytes){
   if(!Number.isFinite(bytes) || bytes <= 0) return 'tamanho desconhecido';
   if(bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
@@ -5287,10 +5310,8 @@ function handlePdfInput(input){
   }
   pdfAttachmentState.file = file;
   pdfAttachmentState.error = '';
-  pdfAutoState = {active:true, processing:true, filled:[], unresolved:[], warnings:[], text:''};
-  setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). Iniciando a leitura automática...`);
-  refreshPdfAutoSummary();
-  readAndFillPdf(file);
+  setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). Será enviado ao salvar.`);
+  refreshPdfPreviewPanel();
 }
 
 const PDF_AUTOFILL_FIELDS = {
@@ -6162,6 +6183,7 @@ function renderPage1(){
         ${field({num:'', label:'Nº da Ficha', key:'fichaNumero', hint:'Preenchimento manual'})}
         ${field({num:'', label:'Data de Lançamento', key:'dataLancamento', type:'date'})}
         ${field({num:'', label:'Status', key:'status', type:'select', required:true, options: STATUS_OPTIONS})}
+        ${renderPdfUpload()}
       </div>
     </div>
 
@@ -6586,14 +6608,6 @@ function lookupCnaeForOccupation(occupation){
 function bindFormEvents(){
   const form = document.getElementById('mainForm');
   if(!form) return;
-  const handleManualFieldChange = e=>{
-    const key = e.target.dataset.k || e.target.dataset.ck;
-    if(key && pdfAutoState.active){
-      pdfAutoState.unresolved = pdfAutoState.unresolved.filter(item=>item !== key);
-      updatePdfFieldVisual(key);
-      refreshPdfAutoSummary();
-    }
-  };
   const handleDuplicateFieldChange = e=>{
     const key = e.target.dataset.k;
     if(!DUPLICATE_CHECK_FIELDS.includes(key)) return;
@@ -6601,7 +6615,6 @@ function bindFormEvents(){
     refreshDuplicateValidation();
   };
   form.addEventListener('input', e=>{
-    handleManualFieldChange(e);
     handleDuplicateFieldChange(e);
     if(e.target.dataset.k === 'dataNascimento'){
       formData.dataNascimento = e.target.value;
@@ -6632,9 +6645,10 @@ function bindFormEvents(){
     }
   });
   form.addEventListener('change', e=>{
-    handleManualFieldChange(e);
     handleDuplicateFieldChange(e);
   });
+  const pdfInput = document.getElementById('pdfFichaInput');
+  if(pdfInput) pdfInput.addEventListener('change', ()=>handlePdfInput(pdfInput));
   document.querySelectorAll('.ac-list').forEach(list=>{
     list.addEventListener('mousedown', e=>{
       const item = e.target.closest('.ac-item');
