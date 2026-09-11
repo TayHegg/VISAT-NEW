@@ -6030,7 +6030,7 @@ function renderPdfPreviewPanel(){
   const isImage = /^image\//i.test(pdfPreviewState.kind || '');
   const content = isImage
     ? `<img class="pdf-preview-image" src="${esc(pdfPreviewState.url)}" alt="Visualização da ficha ${esc(pdfPreviewState.name || '')}">`
-    : `<object class="pdf-preview-object" data="${esc(pdfPreviewState.url)}" type="application/pdf"><iframe class="pdf-preview-frame" src="${esc(pdfPreviewState.url)}" title="Visualização da ficha" loading="lazy"></iframe><a class="pdf-preview-fallback" href="${esc(pdfPreviewState.url)}" target="_blank" rel="noopener">Abrir PDF em nova aba</a></object>`;
+    : `<iframe class="pdf-preview-frame" src="${esc(pdfPreviewState.url)}" title="Visualização da ficha" loading="eager"></iframe><a class="pdf-preview-fallback" href="${esc(pdfPreviewState.url)}" target="_blank" rel="noopener">Abrir PDF em nova aba</a>`;
   return `<div class="pdf-preview-panel" id="pdfPreviewPanel">
     <div class="pdf-preview-header"><strong>Visualização da ficha</strong><span>${esc(pdfPreviewState.name || 'Arquivo anexado')}</span><button type="button" class="btn btn-ghost btn-sm pdf-preview-close" onclick="closePdfPreview()">Fechar</button></div>
     ${content}
@@ -6130,9 +6130,11 @@ async function getPdfAttachmentUrl(attachment){
 }
 async function getPdfBrowserUrl(attachment){
   if(attachment?.mode === 'record' && attachment.dataUrl){
-    const response = await fetch(attachment.dataUrl);
-    if(!response.ok) throw new Error('Não foi possível preparar o PDF para visualização.');
-    const blob = await response.blob();
+    const base64 = String(attachment.dataUrl).split(',')[1] || '';
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for(let index=0; index<binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    const blob = new Blob([bytes], {type:attachment.contentType || 'application/pdf'});
     return {url:URL.createObjectURL(blob), revoke:true};
   }
   return {url:await getPdfAttachmentUrl(attachment), revoke:false};
