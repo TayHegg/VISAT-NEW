@@ -6033,9 +6033,13 @@ function renderPdfPreviewPanel(){
     ? `<img class="pdf-preview-image" src="${esc(pdfPreviewState.url)}" alt="Visualização da ficha ${esc(pdfPreviewState.name || '')}">`
     : `<iframe class="pdf-preview-frame" src="${esc(pdfPreviewState.url)}" title="Visualização da ficha" loading="lazy"></iframe>`;
   return `<div class="pdf-preview-panel" id="pdfPreviewPanel">
-    <div class="pdf-preview-header"><strong>Visualização da ficha</strong><span>${esc(pdfPreviewState.name || 'Arquivo anexado')}</span></div>
+    <div class="pdf-preview-header"><strong>Visualização da ficha</strong><span>${esc(pdfPreviewState.name || 'Arquivo anexado')}</span><button type="button" class="btn btn-ghost btn-sm pdf-preview-close" onclick="closePdfPreview()">Fechar</button></div>
     ${content}
   </div>`;
+}
+function setPdfPreviewLayout(collapsed){
+  const app = document.querySelector('.app');
+  if(app) app.classList.toggle('pdf-preview-sidebar-collapsed', Boolean(collapsed));
 }
 function refreshPdfPreviewPanel(){
   const host = document.getElementById('pdfPreviewPanelHost');
@@ -6045,10 +6049,12 @@ function refreshPdfPreviewPanel(){
     button.disabled = !(pdfAttachmentState.file || pdfAttachmentState.attachment);
     button.textContent = pdfPreviewState.open ? 'Fechar visualização' : 'Visualizar ficha';
   }
+  setPdfPreviewLayout(pdfPreviewState.open);
 }
 function clearPdfPreview(){
   if(pdfPreviewState.revoke && pdfPreviewState.url) URL.revokeObjectURL(pdfPreviewState.url);
   pdfPreviewState = {open:false, url:'', revoke:false, kind:'application/pdf', name:''};
+  setPdfPreviewLayout(false);
 }
 function closePdfPreview(){
   clearPdfPreview();
