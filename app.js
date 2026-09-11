@@ -4101,6 +4101,12 @@ function renderAnalyticsSelection(list, filter){
         : selection.kind === 'month'
           ? `Fichas — ${MESES[Number(selection.value)-1] || 'Mês selecionado'}`
           : (AGRAVOS[selection.kind]?.label || 'Fichas selecionadas');
+  if(selection.kind === 'unit'){
+    return `<aside class="analytics-unit-drawer" aria-label="Fichas da unidade ${esc(selection.value)}">
+      <div class="analytics-unit-drawer-header"><div><strong>${esc(selection.value)}</strong><span>${list.length} ficha(s) encontrada(s)</span></div><button type="button" class="btn btn-ghost btn-sm" onclick="setAnalyticsCardFilter(null)">Fechar</button></div>
+      <div class="analytics-unit-drawer-body">${renderFichaSelectionList(list)}</div>
+    </aside>`;
+  }
   return `<div class="panel selection-panel analytics-selection-panel">
     <div class="selection-heading"><div><h2>${esc(title)}</h2><div class="selection-hint">Clique em uma ficha para abrir o cadastro completo.</div></div><span class="selection-count">${list.length}</span></div>
     ${renderFichaSelectionList(list)}
