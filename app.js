@@ -5269,7 +5269,6 @@ function renderPdfUpload(){
     </div>
     <span class="hint ${pdfAttachmentState.error?'pdf-error':''}" id="pdfFichaStatus">${esc(status)}</span>
     <div id="pdfPreviewPanelHost">${renderPdfPreviewPanel()}</div>
-    ${attachment ? `<div class="pdf-existing no-print"><span>Arquivo já vinculado a esta ficha.</span><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(formData.id)}')">Abrir PDF salvo</button></div>` : ''}
   </div>`;
 }
 function formatFileSize(bytes){
