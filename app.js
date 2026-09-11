@@ -6809,6 +6809,8 @@ async function saveRecord(){
   formData.anoReferencia = OPERATIONAL_YEAR;
   formData.municipioNotificacao = 'Rio das Ostras';
   formData.ufNotificacao = 'RJ';
+  formData.municipioOcorrencia = 'Rio das Ostras';
+  formData.ufOcorrencia = 'RJ';
   applyInvestigatorDefaults();
   const duplicateMatches = isEditingExistingRecord() ? [] : refreshDuplicateValidation();
   if(duplicateMatches.some(match=>match.byNumber || match.byNameDate)){
