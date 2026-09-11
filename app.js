@@ -5249,32 +5249,6 @@ function renderPdfAutoSummary(){
     ${warning}
   </div>`;
 }
-function renderPdfUpload(){
-  const attachment = pdfAttachmentState.attachment;
-  const selected = pdfAttachmentState.file;
-  const canPreview = Boolean(selected || attachment);
-  const status = pdfAttachmentState.error
-    ? pdfAttachmentState.error
-    : pdfAutoState.processing
-      ? 'Leitura automática em andamento...'
-      : selected
-        ? `PDF selecionado: ${selected.name} (${formatFileSize(selected.size)}). Será enviado ao salvar.`
-        : attachment
-          ? `PDF anexado: ${attachment.name || 'ficha.pdf'}. O vínculo será mantido ao salvar.`
-          : 'Faça o upload do PDF oficial da ficha para anexá-lo e iniciar a leitura automática.';
-  return `<div class="field pdf-upload span2">
-    <label for="pdfFichaInput">Arquivo PDF da Ficha</label>
-    <div class="pdf-actions no-print">
-      <input id="pdfFichaInput" type="file" accept="application/pdf,.pdf" aria-label="Selecionar PDF da ficha">
-      <button type="button" class="btn btn-primary btn-sm pdf-upload-btn" onclick="document.getElementById('pdfFichaInput').click()">Upload de Ficha</button>
-      <button type="button" class="btn btn-ghost btn-sm pdf-view-btn" onclick="previewCurrentPdf()" ${canPreview?'':'disabled'}>${pdfPreviewState.open?'Fechar visualização':'Visualizar ficha'}</button>
-    </div>
-    <span class="hint ${pdfAttachmentState.error?'pdf-error':''}" id="pdfFichaStatus">${esc(status)}</span>
-    <div id="pdfPreviewPanelHost">${renderPdfPreviewPanel()}</div>
-    ${attachment ? `<div class="pdf-existing no-print"><span>Arquivo já vinculado a esta ficha.</span><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(formData.id)}')">Abrir PDF salvo</button></div>` : ''}
-    ${renderPdfAutoSummary()}
-  </div>`;
-}
 function formatFileSize(bytes){
   if(!Number.isFinite(bytes) || bytes <= 0) return 'tamanho desconhecido';
   if(bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
@@ -6149,12 +6123,6 @@ function renderForm(){
       <div class="step ${formPage===2?'active':''} ${!impl?'disabled':''}" onclick="${impl?'switchPage(2)':''}">2. Questionário Específico — ${esc(AGRAVOS[type]?.label||'')}</div>
     </div>
     <form id="mainForm">
-      <div class="voice-dictation-toolbar" aria-live="polite">
-        <button type="button" class="btn btn-ghost" id="voiceDictationBtn" aria-pressed="false">
-          <span aria-hidden="true">●</span> Ditado/Microfone
-        </button>
-        <span id="voiceDictationStatus" class="voice-dictation-status">Fale os campos e valores; por exemplo: “Nome do paciente: Patrícia de Almeida”.</span>
-      </div>
       ${formPage===1 ? renderPage1() : renderPage2(type)}
       <div class="form-actions no-print">
         <button type="button" class="btn btn-ghost" onclick="goTo('consulta')">Cancelar</button>
@@ -6194,7 +6162,6 @@ function renderPage1(){
         ${field({num:'', label:'Nº da Ficha', key:'fichaNumero', hint:'Preenchimento manual'})}
         ${field({num:'', label:'Data de Lançamento', key:'dataLancamento', type:'date'})}
         ${field({num:'', label:'Status', key:'status', type:'select', required:true, options: STATUS_OPTIONS})}
-        ${renderPdfUpload()}
       </div>
     </div>
 
@@ -6668,8 +6635,6 @@ function bindFormEvents(){
     handleManualFieldChange(e);
     handleDuplicateFieldChange(e);
   });
-  const pdfInput = document.getElementById('pdfFichaInput');
-  if(pdfInput) pdfInput.addEventListener('change', ()=>handlePdfInput(pdfInput));
   document.querySelectorAll('.ac-list').forEach(list=>{
     list.addEventListener('mousedown', e=>{
       const item = e.target.closest('.ac-item');
