@@ -6811,6 +6811,7 @@ async function saveRecord(){
   formData.ufNotificacao = 'RJ';
   formData.municipioOcorrencia = 'Rio das Ostras';
   formData.ufOcorrencia = 'RJ';
+  if(formData.status === 'finalizado') formData.ocorreuAtendimentoMedico = '1';
   applyInvestigatorDefaults();
   const duplicateMatches = isEditingExistingRecord() ? [] : refreshDuplicateValidation();
   if(duplicateMatches.some(match=>match.byNumber || match.byNameDate)){
