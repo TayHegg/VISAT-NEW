@@ -18,6 +18,7 @@ body{margin:0;font-family:var(--font-body);background:var(--bg);color:var(--text
 .app.pdf-preview-sidebar-collapsed .sidebar .foot{display:none;}
 .app.pdf-preview-sidebar-collapsed .sidebar .nav-item{justify-content:center;padding-left:0;padding-right:0;font-size:0;}
 .app.pdf-preview-sidebar-collapsed .sidebar .nav-item svg{width:20px;height:20px;}
+.app.pdf-preview-sidebar-collapsed .main{flex:0 0 calc(50vw - 58px);max-width:calc(50vw - 58px);}
 .sidebar .brand{padding:0 20px 20px;border-bottom:1px solid rgba(255,255,255,.12);margin-bottom:14px;}
 .sidebar .brand .tag{font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;color:#8FC7B7;text-transform:uppercase;}
 .sidebar .brand .title{font-size:17px;font-weight:600;margin-top:4px;line-height:1.25;}
@@ -491,6 +492,8 @@ tr:hover td{background:var(--surface-2);}
   border: 0;
   background: #fff;
 }
+.pdf-preview-object{display:block;width:100%;height:calc(100vh - 48px);border:0;background:#fff;}
+.pdf-preview-fallback{display:block;padding:14px;color:var(--primary-2);font-weight:600;text-align:center;}
 .pdf-preview-image {
   display: block;
   width: 100%;

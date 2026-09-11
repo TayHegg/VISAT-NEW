@@ -6031,7 +6031,7 @@ function renderPdfPreviewPanel(){
   const isImage = /^image\//i.test(pdfPreviewState.kind || '');
   const content = isImage
     ? `<img class="pdf-preview-image" src="${esc(pdfPreviewState.url)}" alt="Visualização da ficha ${esc(pdfPreviewState.name || '')}">`
-    : `<iframe class="pdf-preview-frame" src="${esc(pdfPreviewState.url)}" title="Visualização da ficha" loading="lazy"></iframe>`;
+    : `<object class="pdf-preview-object" data="${esc(pdfPreviewState.url)}" type="application/pdf"><iframe class="pdf-preview-frame" src="${esc(pdfPreviewState.url)}" title="Visualização da ficha" loading="lazy"></iframe><a class="pdf-preview-fallback" href="${esc(pdfPreviewState.url)}" target="_blank" rel="noopener">Abrir PDF em nova aba</a></object>`;
   return `<div class="pdf-preview-panel" id="pdfPreviewPanel">
     <div class="pdf-preview-header"><strong>Visualização da ficha</strong><span>${esc(pdfPreviewState.name || 'Arquivo anexado')}</span><button type="button" class="btn btn-ghost btn-sm pdf-preview-close" onclick="closePdfPreview()">Fechar</button></div>
     ${content}
@@ -6125,9 +6125,11 @@ async function getPdfAttachmentUrl(attachment){
 async function openPdfForRecord(id){
   const record = records.find(r=>r.id===id);
   if(!record?.pdfFicha){ showToast('Esta ficha não possui PDF anexado.'); return; }
+  const tab = window.open('about:blank', '_blank');
+  if(!tab){ showToast('O navegador bloqueou a nova aba. Permita pop-ups para abrir o PDF.'); return; }
   const url = await getPdfAttachmentUrl(record.pdfFicha);
-  if(!url){ showToast('Não foi possível abrir o PDF anexado.'); return; }
-  window.open(url, '_blank', 'noopener');
+  if(!url){ tab.close(); showToast('Não foi possível abrir o PDF anexado.'); return; }
+  tab.location.href = url;
 }
 
 function checkboxGroup(opts){
