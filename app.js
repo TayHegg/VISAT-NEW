@@ -4813,6 +4813,7 @@ function renderConsulta(){
       <tbody>
         ${pageItems.map(r=>{
           const level = worstLevel(computeAlerts(r));
+          const missing = getMissingDataLabels(r);
           const statusLabel = (STATUS_OPTIONS.find(s=>s[0]===r.status)||[,'—'])[1];
           return `<tr>
             <td style="font-family:var(--font-mono);color:var(--text-muted)">${esc(fichaLabel(r))}</td>
@@ -4821,7 +4822,7 @@ function renderConsulta(){
             <td>${fmtDate(r.dataNotificacao)}</td>
             <td>${esc(r.municipioNotificacao||'—')}</td>
             <td><span class="badge ${r.status==='finalizado'?'green':'amber'}">${esc(statusLabel)}</span></td>
-            <td><span class="badge ${level}"><span class="dot ${level}"></span>${level==='red'?'Crítico':level==='amber'?'Atenção':'OK'}</span></td>
+            <td><span class="badge ${level}"><span class="dot ${level}"></span>${level==='red'?'Crítico':level==='amber'?'Atenção':'OK'}</span>${missing.length ? `<ul class="consulta-pendencias">${missing.map(item=>`<li>${esc(item)}</li>`).join('')}</ul>` : ''}</td>
             <td><div class="row-actions" style="justify-content:flex-end">
               <button class="btn-icon" title="Visualizar" onclick="goTo('print','${r.id}')">${iconEye()}</button>
               <button class="btn-icon" title="Editar" onclick="goTo('form','${r.id}')">${iconEdit()}</button>
@@ -4981,7 +4982,6 @@ const EXPORT_COMMON_COLS = [
   ['Zona', r=>labelOf([['1','Urbana'],['2','Rural'],['3','Periurbana'],['9','Ignorado']], r.resZona)],
   ['Ponto de Referência (Residência)', r=>r.resPontoReferencia||''],
   ['Telefone (Residência)', r=>r.resTelefone||''],
-  ['País', r=>r.resPais||''],
   ['Ocupação (Profissão)', r=>r.ocupacao||''],
   ['Nº do SINAN', r=>r.numeroSinan||''],
   ['CBO', r=>r.cbo||''],
@@ -6196,6 +6196,8 @@ function switchPage(p){
   render();
 }
 function renderPage1(){
+  formData.municipioNotificacao = 'Rio das Ostras';
+  formData.ufNotificacao = 'RJ';
   return `
   <div class="panel">
     <div class="form-section">
@@ -6224,8 +6226,8 @@ function renderPage1(){
         ${unidadeSaudeField()}
         ${field({num:'', label:'Data da Notificação', key:'dataNotificacao', type:'date', required:true})}
         ${field({num:'', label:'Data do Acidente', key:'dataAcidente', type:'date'})}
-        ${field({num:'', label:'Município de Notificação', key:'municipioNotificacao', required:true})}
-        ${field({num:'', label:'UF de Notificação', key:'ufNotificacao', type:'select', required:true, options: UFS.map(u=>[u,u])})}
+        ${field({num:'', label:'Município de Notificação', key:'municipioNotificacao', required:true, readOnly:true})}
+        ${field({num:'', label:'UF de Notificação', key:'ufNotificacao', type:'select', required:true, options:[['RJ','RJ']]})}
       </div>
     </div>
 
@@ -6259,7 +6261,6 @@ function renderPage1(){
         ${field({num:'', label:'Zona', key:'resZona', type:'select', options:[['1','Urbana'],['2','Rural'],['3','Periurbana'],['9','Ignorado']]})}
         ${field({num:'', label:'Ponto de Referência', key:'resPontoReferencia', span:'span2'})}
         ${field({num:'', label:'Telefone (DDD + número)', key:'resTelefone', type:'tel'})}
-        ${field({num:'', label:'País (se residente fora do Brasil)', key:'resPais'})}
       </div>
     </div>
 
@@ -6806,6 +6807,8 @@ async function saveRecord(){
     return;
   }
   formData.anoReferencia = OPERATIONAL_YEAR;
+  formData.municipioNotificacao = 'Rio das Ostras';
+  formData.ufNotificacao = 'RJ';
   applyInvestigatorDefaults();
   const duplicateMatches = isEditingExistingRecord() ? [] : refreshDuplicateValidation();
   if(duplicateMatches.some(match=>match.byNumber || match.byNameDate)){
