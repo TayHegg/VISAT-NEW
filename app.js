@@ -5163,6 +5163,37 @@ function field(opts){
     ${duplicateHint}
   </div>`;
 }
+const UNIDADE_SAUDE_OPTIONS = ['UPA','PRONTO SOCORRO','HOSPITAL MUNICIPAL NOELMA MONTEIRO','ESF CIDADE PRAIANA','VISAT','OUTRO'];
+function unidadeSaudeField(){
+  const current = String(formData.unidadeSaude || '').trim();
+  const isPreset = UNIDADE_SAUDE_OPTIONS.slice(0,-1).includes(current);
+  const selectValue = isPreset ? current : (current ? 'OUTRO' : '');
+  const otherValue = String(formData.unidadeSaudeOutro || (selectValue === 'OUTRO' ? current : '')).trim();
+  return `<div class="field span2">
+    <label>Unidade de Saúde (ou outra fonte notificadora) <span class="req">*</span></label>
+    <select data-k="unidadeSaude" required onchange="toggleOutraUnidadeSaude(this.value)">
+      <option value="">Selecione...</option>
+      ${UNIDADE_SAUDE_OPTIONS.map(option=>`<option value="${esc(option)}" ${selectValue===option?'selected':''}>${esc(option)}</option>`).join('')}
+    </select>
+    <div id="unidadeSaudeOutroWrap" class="field-inline-other" style="${selectValue==='OUTRO'?'':'display:none'}">
+      <label for="unidadeSaudeOutro">Digite a unidade de saúde</label>
+      <input id="unidadeSaudeOutro" type="text" data-k="unidadeSaudeOutro" value="${esc(otherValue)}" placeholder="Informe a unidade de saúde" oninput="formData.unidadeSaudeOutro=this.value;formData.unidadeSaude=this.value">
+    </div>
+  </div>`;
+}
+function toggleOutraUnidadeSaude(value){
+  const wrap = document.getElementById('unidadeSaudeOutroWrap');
+  const input = document.getElementById('unidadeSaudeOutro');
+  const isOther = value === 'OUTRO';
+  if(wrap) wrap.style.display = isOther ? '' : 'none';
+  if(isOther){
+    formData.unidadeSaudeOutro = String(input?.value || formData.unidadeSaudeOutro || '').trim();
+    formData.unidadeSaude = formData.unidadeSaudeOutro;
+  }else{
+    formData.unidadeSaudeOutro = '';
+    formData.unidadeSaude = value || '';
+  }
+}
 function cepField(){
   const val = formData.resCep ?? '';
   return `<div class="field cep-field">
@@ -6170,7 +6201,7 @@ function renderPage1(){
     <div class="form-section">
       <div class="sec-title">Notificação Individual</div>
       <div class="field-grid">
-        ${field({num:'', label:'Unidade de Saúde (ou outra fonte notificadora)', key:'unidadeSaude', required:true, span:'span2'})}
+        ${unidadeSaudeField()}
         ${field({num:'', label:'Data da Notificação', key:'dataNotificacao', type:'date', required:true})}
         ${field({num:'', label:'Data do Acidente', key:'dataAcidente', type:'date'})}
         ${field({num:'', label:'Município de Notificação', key:'municipioNotificacao', required:true})}
@@ -6264,6 +6295,8 @@ function selectAgravo(k){
 }
 
 function renderPage2(type){
+  formData.ufOcorrencia = 'RJ';
+  formData.municipioOcorrencia = 'Rio das Ostras';
   if(type === 'lerdort') return renderPage2LerDort();
   if(type === 'mental') return renderPage2Mental();
   if(type === 'biologico') return renderPage2Biologico();
@@ -6278,8 +6311,8 @@ function renderPage2Grave(){
         ${field({num:'', label:'Data do Acidente', key:'dataAcidente', type:'date', required:true})}
         ${field({num:50, label:'Hora do Acidente', key:'horaAcidente', type:'text', hint:'Formato HH:MM'})}
         ${field({num:51, label:'Horas Após o Início da Jornada', key:'horasAposInicioJornada', hint:'Formato HH:MM'})}
-        ${field({num:52, label:'UF de Ocorrência', key:'ufOcorrencia', type:'select', required:true, options: UFS.map(u=>[u,u])})}
-        ${field({num:53, label:'Município de Ocorrência do Acidente', key:'municipioOcorrencia', required:true, span:'span2'})}
+        ${field({num:52, label:'UF de Ocorrência', key:'ufOcorrencia', type:'select', required:true, options:[['RJ','RJ']]})}
+        ${field({num:53, label:'Município de Ocorrência do Acidente', key:'municipioOcorrencia', required:true, readOnly:true, span:'span2'})}
         ${autocompleteField({num:54, label:'Código da Causa do Acidente (CID-10, V01 a Y98)', key:'causaCID10', db:'cid'})}
         ${field({num:55, label:'Tipo de Acidente', key:'tipoAcidente', type:'select', required:true, options:[['1','Típico'],['2','Trajeto'],['9','Ignorado']]})}
       </div>
@@ -6492,6 +6525,7 @@ function syncFormFromDOM(){
   document.querySelectorAll('#mainForm [data-k]').forEach(el=>{
     formData[el.dataset.k] = el.value;
   });
+  if(formData.unidadeSaude === 'OUTRO') formData.unidadeSaude = String(formData.unidadeSaudeOutro || '').trim();
   const groups = {};
   document.querySelectorAll('#mainForm [data-ck]').forEach(el=>{
     const k = el.dataset.ck;
