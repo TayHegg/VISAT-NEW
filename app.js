@@ -5156,7 +5156,7 @@ function backupValue(value){
 }
 
 function exportExcel(){
-  const list = records.filter(r=>r && !r.controleFicha);
+  const list = recordsForYear(OPERATIONAL_YEAR).filter(r=>r && !r.controleFicha);
   if(!list.length){ showToast('Não há fichas cadastradas para gerar o backup.'); return; }
   if(typeof XLSX === 'undefined'){ showToast('Não foi possível carregar a biblioteca de exportação. Verifique sua conexão com a internet.'); return; }
   const wb = XLSX.utils.book_new();
