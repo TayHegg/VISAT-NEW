@@ -3369,6 +3369,49 @@ async function submitControleDistribuicao(event){
   } else {
     showToast(`${saved.length} ficha(s) distribuída(s) para ${destino}.`);
   }
+  if(destino === 'Epidemiologia' && saved.length) showEpidemiologiaPdfOffer(saved, dataDistribuicao);
+}
+function controleFichaAgravoSigla(record){
+  return record?.agravoType === 'mental' ? 'ATMRT' : record?.agravoType === 'biologico' ? 'ATMB' : record?.agravoType === 'lerdort' ? 'LER.DORT' : 'AT';
+}
+let epidemiologiaPdfPending = null;
+function showEpidemiologiaPdfOffer(numbers, dataDistribuicao){
+  const entries = numbers.map(numero=>{
+    const record = findLinkedRecord(numero);
+    return {sigla:controleFichaAgravoSigla(record), numero, nome:record?.patientName || 'Nome não informado'};
+  });
+  const year = String(dataDistribuicao || todayISO()).slice(0,4);
+  epidemiologiaPdfPending = {entries, year};
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-bg" id="epidemiologiaPdfOffer" onclick="if(event.target===this)document.getElementById('epidemiologiaPdfOffer')?.remove()"><div class="modal"><h3>Distribuição salva</h3><p>${entries.length} ficha(s) foram distribuídas para a Epidemiologia. Deseja baixar a lista em PDF?</p><div class="row"><button type="button" class="btn btn-ghost" onclick="document.getElementById('epidemiologiaPdfOffer')?.remove()">Agora não</button><button type="button" class="btn btn-primary" onclick="downloadPendingEpidemiologiaPdf()">Baixar PDF da lista</button></div></div></div>`);
+}
+function downloadPendingEpidemiologiaPdf(){
+  const pending = epidemiologiaPdfPending;
+  epidemiologiaPdfPending = null;
+  document.getElementById('epidemiologiaPdfOffer')?.remove();
+  if(pending) downloadEpidemiologiaPdf(pending.entries, pending.year);
+}
+function downloadEpidemiologiaPdf(entries, year){
+  const jsPDF = window.jspdf?.jsPDF;
+  const doc = jsPDF ? new jsPDF({orientation:'landscape', unit:'mm', format:'a4'}) : null;
+  if(!doc || typeof doc.autoTable !== 'function'){
+    showToast('Não foi possível carregar o gerador de PDF. Recarregue a página e tente novamente.');
+    return;
+  }
+  const rows = entries.map(item=>[item.sigla, item.numero || 'S/N', item.nome || 'Nome não informado', `__/__/${year}`, '____________________________']);
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(13);
+  doc.text('TRÂMITE DE NOTIFICAÇÕES DEVOLVIDAS PARA EPIDEMIOLOGIA - ACIDENTE DE TRABALHO', 148.5, 14, {align:'center'});
+  doc.autoTable({
+    startY: 20,
+    head: [['AGRAVO','Nº DA FICHA','NOME','DATA DE RECEBIMENTO DA DEVOLUÇÃO DAS FICHAS','ASSINATURA']],
+    body: rows,
+    theme: 'grid',
+    styles: {font:'helvetica', fontSize:9, lineColor:[35,35,35], lineWidth:0.25, cellPadding:2.2, halign:'center', valign:'middle'},
+    headStyles: {fillColor:[164,196,225], textColor:[15,25,35], fontStyle:'bold', fontSize:8.5},
+    columnStyles: {0:{cellWidth:25}, 1:{cellWidth:28}, 2:{cellWidth:96, halign:'left'}, 3:{cellWidth:72}, 4:{cellWidth:52}},
+    margin: {left:10, right:10},
+  });
+  doc.save(`TRAMITE_EPIDEMIOLOGIA_${year}-${todayISO().slice(5)}.pdf`);
 }
 function confirmarControleBusca(tipo){
   if(tipo === 'numero'){
