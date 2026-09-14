@@ -9,9 +9,17 @@ function normalizeSearchText(value) {
 eval(source.slice(start, end));
 const numbered = parseBatchPdfName('20 - AT - GENIALDO DO ESPIRITO SANTO SOUSA FILHO.pdf');
 const unnumbered = parseBatchPdfName('AT - ARTHUR COIMBRA DA SILVA.pdf');
+const agravoAliases = [
+  ['ATMRT', 'mental'],
+  ['ATMB', 'biologico'],
+  ['LER.DORT', 'lerdort'],
+].map(([alias, expected]) => ({ alias, expected, parsed: parseBatchPdfName(`${alias} - PACIENTE TESTE.pdf`) }));
 const invalid = parseBatchPdfName('ARTHUR COIMBRA DA SILVA.pdf');
 if (numbered.number !== '20' || numbered.patientName !== 'GENIALDO DO ESPIRITO SANTO SOUSA FILHO' || numbered.agravoType !== 'grave') throw new Error(`Formato numerado inválido: ${JSON.stringify(numbered)}`);
 if (unnumbered.number !== '' || unnumbered.patientName !== 'ARTHUR COIMBRA DA SILVA' || unnumbered.agravoType !== 'grave') throw new Error(`Formato sem número inválido: ${JSON.stringify(unnumbered)}`);
+for (const { alias, expected, parsed } of agravoAliases) {
+  if (parsed.number !== '' || parsed.patientName !== 'PACIENTE TESTE' || parsed.agravoType !== expected) throw new Error(`Agravo ${alias} inválido: ${JSON.stringify(parsed)}`);
+}
 if (invalid.number !== '' || invalid.patientName !== '') throw new Error(`Formato inválido aceito: ${JSON.stringify(invalid)}`);
 if (batchItemStatus({ number: '', patientName: 'ARTHUR COIMBRA DA SILVA', record: null }) !== 'new') throw new Error('Registro sem número não foi classificado como novo');
-console.log('OK', { numbered, unnumbered, invalid });
+console.log('OK', { numbered, unnumbered, agravoAliases, invalid });

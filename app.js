@@ -4800,7 +4800,8 @@ function parseBatchPdfName(name){
   const number = numberedMatch ? String(Number(numberedMatch[1])) : '';
   const typeToken = (numberedMatch ? numberedMatch[2] : unnumberedMatch[1]).trim().toUpperCase();
   const patientName = (numberedMatch ? numberedMatch[3] : unnumberedMatch[2]).trim();
-  const agravoType = typeToken.includes('LER') ? 'lerdort' : typeToken.includes('BIO') || typeToken.includes('ATMB') ? 'biologico' : typeToken.includes('MENTAL') || typeToken.includes('ATMRT') ? 'mental' : 'grave';
+  const normalizedTypeToken = typeToken.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.\s/_-]/g, '');
+  const agravoType = normalizedTypeToken === 'ATMRT' ? 'mental' : normalizedTypeToken === 'ATMB' ? 'biologico' : normalizedTypeToken === 'LERDORT' ? 'lerdort' : 'grave';
   return {number, patientName, agravoType, displayName:base};
 }
 function batchItemStatus(item){
