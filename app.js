@@ -4838,7 +4838,9 @@ async function analyzeBatchZip(input){
       const file=await entry.async('blob');
       if(file.size > PDF_MAX_BYTES){ items.push({...parsed,file:null,record:null,status:'bad',displayName:`${parsed.displayName} (maior que ${formatFileSize(PDF_MAX_BYTES)})`}); continue; }
       const pdf=new File([file], parsed.displayName, {type:'application/pdf'});
-      const record=records.find(r=>batchFichaKey(r.fichaNumero)===batchFichaKey(parsed.number));
+      // O mesmo número de ficha pode existir em anos diferentes. O lote atual é de 2026,
+      // portanto a correspondência deve considerar exclusivamente as fichas operacionais do ano.
+      const record=operationalRecords().find(r=>batchFichaKey(r.fichaNumero)===batchFichaKey(parsed.number));
       const item={...parsed,file,record,status:'bad'};
       item.status=batchItemStatus(item);
       items.push(item);
