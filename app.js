@@ -4187,6 +4187,8 @@ function renderAnalytics(forcedYear=''){
   const total = filtered.length;
   const byType = {};
   Object.keys(AGRAVOS).forEach(k=> byType[k] = filtered.filter(r=>r.agravoType===k).length);
+  const animalAgressorCount = filtered.filter(r=>r.tipoFichaAnimal === 'animal_agressor').length;
+  const animalPeconhentoCount = filtered.filter(r=>r.tipoFichaAnimal === 'animal_peconhento').length;
   const selection = getAnalyticsSelection(analyticsCardFilter);
   const analyticsSelected = selection.kind === 'all'
     ? filtered
@@ -4235,6 +4237,8 @@ function renderAnalytics(forcedYear=''){
         <div class="ind-card ${k} is-clickable ${analyticsCardFilter===k?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas desta classificação" onclick="setAnalyticsCardFilter('${k}')"><div class="n">${byType[k]}</div><div class="l">${esc(v.label)}</div><div class="pct">${pct(byType[k],total)}% do total</div></div>
       `).join('')}
       <div class="ind-card moto is-clickable ${analyticsCardFilter==='moto'?'selected':''}" role="button" tabindex="0" title="Clique para listar os indícios de acidentes envolvendo motocicleta" onclick="setAnalyticsCardFilter('moto')"><div class="n">${motoCount}</div><div class="l">Acidentes envolvendo moto</div><div class="pct">${pct(motoCount,total)}% do total</div></div>
+      <div class="ind-card animal-agressor"><div class="n">${animalAgressorCount}</div><div class="l">Ficha de animal agressor</div><div class="pct">${pct(animalAgressorCount,total)}% do total</div></div>
+      <div class="ind-card animal-peconhento"><div class="n">${animalPeconhentoCount}</div><div class="l">Ficha de animal peçonhento</div><div class="pct">${pct(animalPeconhentoCount,total)}% do total</div></div>
     </div>
     <div>
       <div class="charts-grid">
@@ -6397,6 +6401,7 @@ function renderPage1(){
       <div class="sec-title">Controle da Ficha</div>
       <div class="field-grid">
         ${field({num:'', label:'Nº da Ficha', key:'fichaNumero', hint:'Preenchimento manual'})}
+        ${field({num:'', label:'Tipo especial da ficha', key:'tipoFichaAnimal', type:'select', options:[['','Nenhum'],['animal_agressor','Ficha de animal agressor'],['animal_peconhento','Ficha de animal peçonhento']], hint:'Opcional — selecione somente quando se aplicar'})}
         ${field({num:'', label:'Data de Lançamento', key:'dataLancamento', type:'date'})}
         ${field({num:'', label:'Status', key:'status', type:'select', required:true, options: STATUS_OPTIONS})}
         ${renderPdfUpload()}
