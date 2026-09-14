@@ -6457,6 +6457,7 @@ function renderPage1(){
         ${unidadeSaudeField()}
         ${field({num:'', label:'Data da Notificação', key:'dataNotificacao', type:'date', required:true})}
         ${field({num:'', label:'Data do Acidente', key:'dataAcidente', type:'date'})}
+        ${field({num:34, label:'Local Onde Ocorreu o Acidente', key:'localAcidente', type:'select', span:'span2', options:[['1','Instalações do contratante'],['3','Instalações de Terceiros'],['2','Via pública'],['4','Domicílio próprio'],['9','Ignorado']]})}
         ${field({num:'', label:'Município de Notificação', key:'municipioNotificacao', required:true, readOnly:true})}
         ${field({num:'', label:'UF de Notificação', key:'ufNotificacao', type:'select', required:true, options:[['RJ','RJ']]})}
       </div>
@@ -6527,12 +6528,6 @@ function renderPage1(){
       </div>
     </div>
 
-    <div class="form-section">
-      <div class="sec-title">Dados do Acidente</div>
-      <div class="field-grid">
-        ${field({num:34, label:'Local Onde Ocorreu o Acidente', key:'localAcidente', type:'select', span:'span2', options:[['1','Instalações do contratante'],['2','Via pública'],['3','Instalações de terceiros'],['4','Domicílio próprio'],['9','Ignorado']]})}
-      </div>
-    </div>
   </div>`;
 }
 function idadeChipText(){
