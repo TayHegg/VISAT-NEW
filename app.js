@@ -4865,8 +4865,10 @@ async function processBatchImport(){
       if(!await upsertRecordRemote(updated)) throw new Error('falha ao salvar a ficha');
       const index=records.findIndex(r=>r.id===updated.id); if(index>=0) records[index]=updated;
       else records.push(updated);
-      success++; attached.push(`Ficha ${updated.fichaNumero} — ${updated.patientName}`);
-      if(!item.record) created.push(`Ficha ${updated.fichaNumero} — ${updated.patientName}`);
+      const reportNumber=item.number || updated.fichaNumero || 'não informado';
+      const reportName=item.patientName || updated.patientName || 'nome não informado';
+      success++; attached.push(`Ficha ${reportNumber} — ${reportName}`);
+      if(!item.record) created.push(`Ficha ${reportNumber} — ${reportName}`);
     }catch(error){ errors.push(`${item.displayName}: ${error.message||'erro desconhecido'}`); }
   }
   batchImportState.processing=false;
