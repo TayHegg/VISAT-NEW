@@ -4775,29 +4775,32 @@ function parseBatchPdfName(name){
   if(!/\.pdf$/i.test(base)) return null;
   const match = base.match(/^\s*(\d+)\s*-\s*[^-]+\s*-\s*(.+?)\s*\.pdf\s*$/i);
   if(!match) return {number:'', patientName:'', displayName:base};
-  return {number:String(Number(match[1])), patientName:match[2].trim(), displayName:base};
+  const typeToken = (base.match(/^\s*\d+\s*-\s*([^-]+?)\s*-/i)?.[1] || '').trim().toUpperCase();
+  const agravoType = typeToken.includes('LER') ? 'lerdort' : typeToken.includes('BIO') || typeToken.includes('ATMB') ? 'biologico' : typeToken.includes('MENTAL') || typeToken.includes('ATMRT') ? 'mental' : 'grave';
+  return {number:String(Number(match[1])), patientName:match[2].trim(), agravoType, displayName:base};
 }
 function batchItemStatus(item){
-  if(!item.record) return 'bad';
+  if(!item.record) return item.number && item.patientName ? 'new' : 'bad';
   if(item.record.pdfFicha) return 'warn';
   if(!duplicateNamesMatch(item.patientName, item.record.patientName) && batchNormalize(item.patientName)!==batchNormalize(item.record.patientName)) return 'warn';
   return 'ok';
 }
 function renderBatchImportModal(){
   const items = batchImportState.items;
-  const ok = items.filter(x=>x.status==='ok').length;
+  const ready = items.filter(x=>x.status==='ok' || x.status==='new').length;
+  const created = items.filter(x=>x.status==='new').length;
   const warn = items.filter(x=>x.status==='warn').length;
   const bad = items.filter(x=>x.status==='bad').length;
   const rows = items.length ? items.map((item,index)=>{
-    const statusText = item.status==='ok' ? `Pronto para anexar à ficha ${item.record?.fichaNumero}` : item.status==='warn' ? (item.record?.pdfFicha ? 'Já existe PDF anexado; não será substituído' : `Divergência de nome: sistema tem “${item.record?.patientName || 'sem nome'}”`) : 'Sem correspondência ou nome fora do padrão';
-    return `<label class="batch-import-item ${item.status}"><input type="checkbox" data-batch-index="${index}" ${item.status==='ok'?'checked':''} ${item.status==='ok'?'':'disabled'}><span><strong>${esc(item.displayName)}</strong><small>${esc(statusText)}</small></span></label>`;
+    const statusText = item.status==='ok' ? `Pronto para anexar à ficha ${item.record?.fichaNumero}` : item.status==='new' ? `Ficha ${item.number} não existe: será criada como “Aguardando investigação” e ficará disponível para digitação/complementação` : item.status==='warn' ? (item.record?.pdfFicha ? 'Já existe PDF anexado; não será substituído' : `Divergência de nome: sistema tem “${item.record?.patientName || 'sem nome'}”`) : 'Sem correspondência ou nome fora do padrão';
+    return `<label class="batch-import-item ${item.status}"><input type="checkbox" data-batch-index="${index}" ${item.status==='ok'||item.status==='new'?'checked':''} ${item.status==='ok'||item.status==='new'?'':'disabled'}><span><strong>${esc(item.displayName)}</strong><small>${esc(statusText)}</small></span></label>`;
   }).join('') : '<div class="empty-state" style="padding:24px">Selecione um arquivo ZIP para analisar.</div>';
   return `<div class="modal-bg" id="batchImportModal" onclick="if(event.target===this)closeBatchImport()"><div class="modal batch-import-modal">
     <h3>Importar PDFs em lote</h3>
     <p class="batch-import-help">O número da ficha é lido no início do nome do arquivo. Exemplo: <b>20 - AT - GENIALDO DO ESPIRITO SANTO SOUSA FILHO.pdf</b>. O sistema confere o paciente e nunca substitui um PDF existente automaticamente.</p>
     <input id="batchZipInput" type="file" accept=".zip,application/zip" onchange="analyzeBatchZip(this)">
-    ${items.length ? `<div class="batch-import-summary"><span class="ok">${ok} prontos</span><span class="warn">${warn} para conferir</span><span class="bad">${bad} sem correspondência</span></div><div class="batch-import-list">${rows}</div>` : ''}
-    <div class="row"><button type="button" class="btn btn-ghost" onclick="closeBatchImport()">Cancelar</button>${items.length ? `<button type="button" class="btn btn-primary" onclick="processBatchImport()" ${batchImportState.processing||!ok?'disabled':''}>${batchImportState.processing?'Importando...':`Anexar selecionados (${ok})`}</button>` : ''}</div>
+    ${items.length ? `<div class="batch-import-summary"><span class="ok">${ready} prontos</span><span class="ok">${created} fichas novas</span><span class="warn">${warn} para conferir</span><span class="bad">${bad} sem correspondência</span></div><div class="batch-import-list">${rows}</div>` : ''}
+    <div class="row"><button type="button" class="btn btn-ghost" onclick="closeBatchImport()">Cancelar</button>${items.length ? `<button type="button" class="btn btn-primary" onclick="processBatchImport()" ${batchImportState.processing||!ready?'disabled':''}>${batchImportState.processing?'Importando...':`Anexar e criar selecionados (${ready})`}</button>` : ''}</div>
   </div></div>`;
 }
 function openBatchImport(){ batchImportState={items:[],processing:false}; document.body.insertAdjacentHTML('beforeend',renderBatchImportModal()); }
@@ -4828,23 +4831,32 @@ async function analyzeBatchZip(input){
 }
 async function processBatchImport(){
   const selected=[...document.querySelectorAll('#batchImportModal input[data-batch-index]:checked')].map(input=>batchImportState.items[Number(input.dataset.batchIndex)]).filter(item=>item?.status==='ok');
-  if(!selected.length) return;
+  const selectedItems=[...document.querySelectorAll('#batchImportModal input[data-batch-index]:checked')].map(input=>batchImportState.items[Number(input.dataset.batchIndex)]).filter(item=>item && (item.status==='ok' || item.status==='new'));
+  if(!selectedItems.length) return;
   batchImportState.processing=true;
   const button=document.querySelector('#batchImportModal .btn-primary'); if(button){button.disabled=true;button.textContent='Importando...';}
-  let success=0; const errors=[];
-  for(const item of selected){
+  let success=0; const created=[]; const attached=[]; const errors=[];
+  for(const item of selectedItems){
     try{
-      const attachment=await uploadPdfAttachment(item.record.id,item.file);
-      const updated={...item.record,pdfFicha:attachment};
+      const baseRecord=item.record || {id:uid(), fichaNumero:item.number, patientName:item.patientName, agravoType:item.agravoType || 'grave', status:'aguardando_investigacao', anoReferencia:OPERATIONAL_YEAR, createdAt:new Date().toISOString()};
+      const attachment=await uploadPdfAttachment(baseRecord.id,item.file);
+      const updated={...baseRecord,pdfFicha:attachment};
       if(!await upsertRecordRemote(updated)) throw new Error('falha ao salvar a ficha');
       const index=records.findIndex(r=>r.id===updated.id); if(index>=0) records[index]=updated;
-      success++;
+      else records.push(updated);
+      success++; attached.push(`Ficha ${updated.fichaNumero} — ${updated.patientName}`);
+      if(!item.record) created.push(`Ficha ${updated.fichaNumero} — ${updated.patientName}`);
     }catch(error){ errors.push(`${item.displayName}: ${error.message||'erro desconhecido'}`); }
   }
   batchImportState.processing=false;
   closeBatchImport(); render();
-  showToast(`${success} PDF(s) anexado(s)${errors.length?`; ${errors.length} erro(s) — confira o console`:''}.`);
+  showToast(`${success} PDF(s) anexado(s)${errors.length?`; ${errors.length} erro(s)`:''}.`);
+  showBatchResult({success,created,attached,errors});
   if(errors.length) console.error('Erros da importação em lote',errors);
+}
+function showBatchResult(result){
+  const list=(title,items,cls='')=>items.length?`<div class="batch-result-section ${cls}"><b>${title}</b><ul>${items.map(item=>`<li>${esc(item)}</li>`).join('')}</ul></div>`:'';
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-bg" id="batchResultModal" onclick="if(event.target===this)this.remove()"><div class="modal batch-import-modal"><h3>Importação concluída</h3><p>${result.success} PDF(s) foram anexados. As fichas novas já estão cadastradas e precisam ser digitadas/completadas.</p>${list('Fichas criadas automaticamente',result.created,'ok')}${list('PDFs anexados',result.attached)}${list('Ocorrências que exigem atenção',result.errors,'bad')}<div class="row"><button type="button" class="btn btn-primary" onclick="document.getElementById('batchResultModal')?.remove()">Entendi</button></div></div></div>`);
 }
 function renderConsulta(){
   const all = getFilteredRecords();
