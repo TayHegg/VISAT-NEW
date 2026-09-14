@@ -2624,6 +2624,7 @@ const INVESTIGADOR_FUNCAO_FIXA = 'Enfermeiro';
 const INVESTIGADOR_OPTIONS = [['Julio Cesar','Julio Cesar'],['Luciane Manhães','Luciane Manhães']];
 const PDF_BUCKET = 'visat-fichas-pdf';
 const PDF_MAX_BYTES = 8 * 1024 * 1024;
+let batchImportState = {items:[], processing:false};
 
 // Mapeamento das partes do corpo oficiais do SINAN para as regiões consolidadas do mapa corporal
 const BODY_REGIONS = [
@@ -4762,6 +4763,89 @@ function getFilteredRecords(){
   });
   return list;
 }
+function batchNormalize(value){
+  return normalizeSearchText(String(value || '')).replace(/\s+/g,' ').trim();
+}
+function batchFichaKey(value){
+  const text=String(value||'').trim();
+  return /^\d+$/.test(text) ? String(Number(text)) : batchNormalize(text);
+}
+function parseBatchPdfName(name){
+  const base = String(name || '').split('/').pop();
+  if(!/\.pdf$/i.test(base)) return null;
+  const match = base.match(/^\s*(\d+)\s*-\s*[^-]+\s*-\s*(.+?)\s*\.pdf\s*$/i);
+  if(!match) return {number:'', patientName:'', displayName:base};
+  return {number:String(Number(match[1])), patientName:match[2].trim(), displayName:base};
+}
+function batchItemStatus(item){
+  if(!item.record) return 'bad';
+  if(item.record.pdfFicha) return 'warn';
+  if(!duplicateNamesMatch(item.patientName, item.record.patientName) && batchNormalize(item.patientName)!==batchNormalize(item.record.patientName)) return 'warn';
+  return 'ok';
+}
+function renderBatchImportModal(){
+  const items = batchImportState.items;
+  const ok = items.filter(x=>x.status==='ok').length;
+  const warn = items.filter(x=>x.status==='warn').length;
+  const bad = items.filter(x=>x.status==='bad').length;
+  const rows = items.length ? items.map((item,index)=>{
+    const statusText = item.status==='ok' ? `Pronto para anexar à ficha ${item.record?.fichaNumero}` : item.status==='warn' ? (item.record?.pdfFicha ? 'Já existe PDF anexado; não será substituído' : `Divergência de nome: sistema tem “${item.record?.patientName || 'sem nome'}”`) : 'Sem correspondência ou nome fora do padrão';
+    return `<label class="batch-import-item ${item.status}"><input type="checkbox" data-batch-index="${index}" ${item.status==='ok'?'checked':''} ${item.status==='ok'?'':'disabled'}><span><strong>${esc(item.displayName)}</strong><small>${esc(statusText)}</small></span></label>`;
+  }).join('') : '<div class="empty-state" style="padding:24px">Selecione um arquivo ZIP para analisar.</div>';
+  return `<div class="modal-bg" id="batchImportModal" onclick="if(event.target===this)closeBatchImport()"><div class="modal batch-import-modal">
+    <h3>Importar PDFs em lote</h3>
+    <p class="batch-import-help">O número da ficha é lido no início do nome do arquivo. Exemplo: <b>20 - AT - GENIALDO DO ESPIRITO SANTO SOUSA FILHO.pdf</b>. O sistema confere o paciente e nunca substitui um PDF existente automaticamente.</p>
+    <input id="batchZipInput" type="file" accept=".zip,application/zip" onchange="analyzeBatchZip(this)">
+    ${items.length ? `<div class="batch-import-summary"><span class="ok">${ok} prontos</span><span class="warn">${warn} para conferir</span><span class="bad">${bad} sem correspondência</span></div><div class="batch-import-list">${rows}</div>` : ''}
+    <div class="row"><button type="button" class="btn btn-ghost" onclick="closeBatchImport()">Cancelar</button>${items.length ? `<button type="button" class="btn btn-primary" onclick="processBatchImport()" ${batchImportState.processing||!ok?'disabled':''}>${batchImportState.processing?'Importando...':`Anexar selecionados (${ok})`}</button>` : ''}</div>
+  </div></div>`;
+}
+function openBatchImport(){ batchImportState={items:[],processing:false}; document.body.insertAdjacentHTML('beforeend',renderBatchImportModal()); }
+function closeBatchImport(){ document.getElementById('batchImportModal')?.remove(); batchImportState={items:[],processing:false}; }
+async function analyzeBatchZip(input){
+  const zipFile=input?.files?.[0];
+  if(!zipFile) return;
+  if(!window.JSZip){ showToast('Leitor ZIP indisponível. Recarregue a página e tente novamente.'); return; }
+  try{
+    const zip=await window.JSZip.loadAsync(zipFile);
+    const items=[];
+    for(const entry of Object.values(zip.files)){
+      if(entry.dir) continue;
+      const parsed=parseBatchPdfName(entry.name);
+      if(!parsed) continue;
+      const file=await entry.async('blob');
+      if(file.size > PDF_MAX_BYTES){ items.push({...parsed,file:null,record:null,status:'bad',displayName:`${parsed.displayName} (maior que ${formatFileSize(PDF_MAX_BYTES)})`}); continue; }
+      const pdf=new File([file], parsed.displayName, {type:'application/pdf'});
+      const record=records.find(r=>batchFichaKey(r.fichaNumero)===batchFichaKey(parsed.number));
+      const item={...parsed,file,record,status:'bad'};
+      item.status=batchItemStatus(item);
+      items.push(item);
+    }
+    batchImportState.items=items;
+    const modal=document.getElementById('batchImportModal'); if(modal) modal.outerHTML=renderBatchImportModal();
+    if(!items.length) showToast('Nenhum PDF com o padrão esperado foi encontrado no ZIP.');
+  }catch(error){ console.error('Falha ao ler ZIP',error); showToast('Não foi possível ler o arquivo ZIP.'); }
+}
+async function processBatchImport(){
+  const selected=[...document.querySelectorAll('#batchImportModal input[data-batch-index]:checked')].map(input=>batchImportState.items[Number(input.dataset.batchIndex)]).filter(item=>item?.status==='ok');
+  if(!selected.length) return;
+  batchImportState.processing=true;
+  const button=document.querySelector('#batchImportModal .btn-primary'); if(button){button.disabled=true;button.textContent='Importando...';}
+  let success=0; const errors=[];
+  for(const item of selected){
+    try{
+      const attachment=await uploadPdfAttachment(item.record.id,item.file);
+      const updated={...item.record,pdfFicha:attachment};
+      if(!await upsertRecordRemote(updated)) throw new Error('falha ao salvar a ficha');
+      const index=records.findIndex(r=>r.id===updated.id); if(index>=0) records[index]=updated;
+      success++;
+    }catch(error){ errors.push(`${item.displayName}: ${error.message||'erro desconhecido'}`); }
+  }
+  batchImportState.processing=false;
+  closeBatchImport(); render();
+  showToast(`${success} PDF(s) anexado(s)${errors.length?`; ${errors.length} erro(s) — confira o console`:''}.`);
+  if(errors.length) console.error('Erros da importação em lote',errors);
+}
 function renderConsulta(){
   const all = getFilteredRecords();
   const totalPages = Math.max(1, Math.ceil(all.length / tableState.pageSize));
@@ -4802,6 +4886,9 @@ function renderConsulta(){
         <option value="amber" ${tableState.filterStatus==='amber'?'selected':''}>Atenção</option>
         <option value="green" ${tableState.filterStatus==='green'?'selected':''}>OK</option>
       </select>
+      <button class="btn btn-primary btn-sm" onclick="openBatchImport()" title="Associar PDFs a fichas pelo número no nome do arquivo">
+        Importar PDFs em lote
+      </button>
       <button class="btn btn-ghost btn-sm" onclick="exportExcel()" title="Baixar backup completo em Excel com todas as fichas e abas do modelo">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
         Baixar backup Excel
