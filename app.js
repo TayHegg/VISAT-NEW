@@ -6457,7 +6457,6 @@ function renderPage1(){
         ${unidadeSaudeField()}
         ${field({num:'', label:'Data da Notificação', key:'dataNotificacao', type:'date', required:true})}
         ${field({num:'', label:'Data do Acidente', key:'dataAcidente', type:'date'})}
-        ${field({num:34, label:'Local Onde Ocorreu o Acidente', key:'localAcidente', type:'select', span:'span2', options:[['1','Instalações do contratante'],['3','Instalações de Terceiros'],['2','Via pública'],['4','Domicílio próprio'],['9','Ignorado']]})}
         ${field({num:'', label:'Município de Notificação', key:'municipioNotificacao', required:true, readOnly:true})}
         ${field({num:'', label:'UF de Notificação', key:'ufNotificacao', type:'select', required:true, options:[['RJ','RJ']]})}
       </div>
@@ -6507,6 +6506,7 @@ function renderPage1(){
           ['01','Empregado registrado com carteira assinada'],['02','Empregado não registrado'],['03','Autônomo/conta própria'],
           ['04','Servidor público estatutário'],['05','Servidor público celetista'],['06','Aposentado'],['07','Desempregado'],
           ['08','Trabalho temporário'],['09','Cooperativado'],['10','Trabalhador avulso'],['11','Empregador'],['12','Outros'],['99','Ignorado']]})}
+        ${field({num:34, label:'Local Onde Ocorreu o Acidente', key:'localAcidente', type:'select', span:'span2', options:[['1','Instalações do contratante'],['3','Instalações de Terceiros'],['2','Via pública'],['4','Domicílio próprio'],['9','Ignorado']]})}
         ${field({num:'', label:'Tempo de Trabalho na Ocupação', key:'tempoTrabalhoOcupacao', hint:'Ex.: 2 anos, 6 meses'})}
       </div>
     </div>
