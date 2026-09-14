@@ -4792,14 +4792,19 @@ function batchFichaKey(value){
 function parseBatchPdfName(name){
   const base = String(name || '').split('/').pop();
   if(!/\.pdf$/i.test(base)) return null;
-  const match = base.match(/^\s*(\d+)\s*-\s*[^-]+\s*-\s*(.+?)\s*\.pdf\s*$/i);
+  // Aceita "20 - AT - NOME.pdf" e também fichas sem número: "AT - NOME.pdf".
+  const numberedMatch = base.match(/^\s*(\d+)\s*-\s*([^-]+?)\s*-\s*(.+?)\s*\.pdf\s*$/i);
+  const unnumberedMatch = base.match(/^\s*([^-]+?)\s*-\s*(.+?)\s*\.pdf\s*$/i);
+  const match = numberedMatch || unnumberedMatch;
   if(!match) return {number:'', patientName:'', displayName:base};
-  const typeToken = (base.match(/^\s*\d+\s*-\s*([^-]+?)\s*-/i)?.[1] || '').trim().toUpperCase();
+  const number = numberedMatch ? String(Number(numberedMatch[1])) : '';
+  const typeToken = (numberedMatch ? numberedMatch[2] : unnumberedMatch[1]).trim().toUpperCase();
+  const patientName = (numberedMatch ? numberedMatch[3] : unnumberedMatch[2]).trim();
   const agravoType = typeToken.includes('LER') ? 'lerdort' : typeToken.includes('BIO') || typeToken.includes('ATMB') ? 'biologico' : typeToken.includes('MENTAL') || typeToken.includes('ATMRT') ? 'mental' : 'grave';
-  return {number:String(Number(match[1])), patientName:match[2].trim(), agravoType, displayName:base};
+  return {number, patientName, agravoType, displayName:base};
 }
 function batchItemStatus(item){
-  if(!item.record) return item.number && item.patientName ? 'new' : 'bad';
+  if(!item.record) return item.patientName ? 'new' : 'bad';
   if(item.record.pdfFicha) return 'warn';
   if(!duplicateNamesMatch(item.patientName, item.record.patientName) && batchNormalize(item.patientName)!==batchNormalize(item.record.patientName)) return 'warn';
   return 'ok';
@@ -4811,12 +4816,12 @@ function renderBatchImportModal(){
   const warn = items.filter(x=>x.status==='warn').length;
   const bad = items.filter(x=>x.status==='bad').length;
   const rows = items.length ? items.map((item,index)=>{
-    const statusText = item.status==='ok' ? `Pronto para anexar à ficha ${item.record?.fichaNumero}` : item.status==='new' ? `Ficha ${item.number} não existe: será criada como “Aguardando Digitação” e ficará disponível para digitação/complementação` : item.status==='warn' ? (item.record?.pdfFicha ? 'Já existe PDF anexado; não será substituído' : `Divergência de nome: sistema tem “${item.record?.patientName || 'sem nome'}”`) : 'Sem correspondência ou nome fora do padrão';
+    const statusText = item.status==='ok' ? `Pronto para anexar à ficha ${item.record?.fichaNumero}` : item.status==='new' ? `${item.number ? `Ficha ${item.number}` : 'Registro sem número'}: será criado como “Aguardando Digitação” e ficará disponível para digitação/complementação` : item.status==='warn' ? (item.record?.pdfFicha ? 'Já existe PDF anexado; não será substituído' : `Divergência de nome: sistema tem “${item.record?.patientName || 'sem nome'}”`) : 'Sem correspondência ou nome fora do padrão';
     return `<label class="batch-import-item ${item.status}"><input type="checkbox" data-batch-index="${index}" ${item.status==='ok'||item.status==='new'?'checked':''} ${item.status==='ok'||item.status==='new'?'':'disabled'}><span><strong>${esc(item.displayName)}</strong><small>${esc(statusText)}</small></span></label>`;
   }).join('') : '<div class="empty-state" style="padding:24px">Selecione um arquivo ZIP para analisar.</div>';
   return `<div class="modal-bg" id="batchImportModal" onclick="if(event.target===this)closeBatchImport()"><div class="modal batch-import-modal">
     <h3>Importar PDFs em lote</h3>
-    <p class="batch-import-help">O número da ficha é lido no início do nome do arquivo. Exemplo: <b>20 - AT - GENIALDO DO ESPIRITO SANTO SOUSA FILHO.pdf</b>. O sistema confere o paciente e nunca substitui um PDF existente automaticamente.</p>
+    <p class="batch-import-help">Aceita <b>20 - AT - NOME.pdf</b> ou, para fichas sem número, <b>AT - NOME.pdf</b>. Nesse caso, cria o registro apenas com agravo, nome e PDF. PDFs existentes nunca são substituídos automaticamente.</p>
     <input id="batchZipInput" type="file" accept=".zip,application/zip" onchange="analyzeBatchZip(this)">
     ${items.length ? `<div class="batch-import-summary"><span class="ok">${ready} prontos</span><span class="ok">${created} fichas novas</span><span class="warn">${warn} para conferir</span><span class="bad">${bad} sem correspondência</span></div><div class="batch-import-list">${rows}</div>` : ''}
     <div class="row"><button type="button" class="btn btn-ghost" onclick="closeBatchImport()">Cancelar</button>${items.length ? `<button type="button" class="btn btn-primary" onclick="processBatchImport()" ${batchImportState.processing||!ready?'disabled':''}>${batchImportState.processing?'Importando...':`Anexar e criar selecionados (${ready})`}</button>` : ''}</div>
@@ -4859,7 +4864,7 @@ async function processBatchImport(){
   let success=0; const created=[]; const attached=[]; const errors=[];
   for(const item of selectedItems){
     try{
-      const baseRecord=item.record || {id:uid(), fichaNumero:item.number, patientName:item.patientName, agravoType:item.agravoType || 'grave', status:'aguardando_digitacao', anoReferencia:OPERATIONAL_YEAR, createdAt:new Date().toISOString()};
+      const baseRecord=item.record || {id:uid(), ...(item.number ? {fichaNumero:item.number} : {}), patientName:item.patientName, agravoType:item.agravoType || 'grave', status:'aguardando_digitacao', anoReferencia:OPERATIONAL_YEAR, createdAt:new Date().toISOString()};
       const attachment=await uploadPdfAttachment(baseRecord.id,item.file);
       const updated={...baseRecord,pdfFicha:attachment};
       if(!await upsertRecordRemote(updated)) throw new Error('falha ao salvar a ficha');
