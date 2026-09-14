@@ -5160,71 +5160,38 @@ function exportExcel(){
   if(!list.length){ showToast('Não há fichas cadastradas para gerar o backup.'); return; }
   if(typeof XLSX === 'undefined'){ showToast('Não foi possível carregar a biblioteca de exportação. Verifique sua conexão com a internet.'); return; }
   const wb = XLSX.utils.book_new();
-  const addSheet = (name, aoa, widths, opts={})=>{
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = widths.map(w=>({wch:w}));
-    styleBackupSheet(ws, opts);
+  const typeLabel = key=>AGRAVOS[key]?.label || key;
+  const byType = key=>list.filter(r=>r.agravoType===key);
+  const val = (r,key, fallback='') => backupValue(r?.[key] ?? fallback);
+  const dt = (r,key) => fmtDate(r?.[key]);
+  const idade = r => { const a=calcIdade(r?.dataNascimento); return a==null ? val(r,'idade') : a; };
+  const status = r => labelOf(STATUS_OPTIONS, r.status);
+  const cat = r => labelOf(CAT_OPTIONS, r.foiEmitidaCAT);
+  const marked = (r,key,label) => Array.isArray(r?.[key]) && r[key].includes(label) ? 'SIM' : 'NÃO';
+  const addSheet = (name, headers, rows, title)=>{
+    const ws = XLSX.utils.aoa_to_sheet([[title], headers, ...rows]);
+    ws['!cols'] = headers.map(h=>({wch:Math.min(42,Math.max(14,String(h).length+3))}));
+    styleBackupSheet(ws, {titleRow:0,headerRow:1});
     XLSX.utils.book_append_sheet(wb, ws, name.slice(0,31));
   };
-  const byType = key=>list.filter(r=>r.agravoType===key);
-  const typeLabel = key=>AGRAVOS[key]?.label || key;
-  const dateStamp = new Date().toISOString().slice(0,10);
-
-  addSheet('Dashboard', [
-    ['DASHBOARD — BACKUP SNAT'],
-    ['Gerado em', new Date().toLocaleString('pt-BR')],
-    [],
-    ['Indicador','Quantidade'],
-    ['Total de fichas', list.length],
-    ...Object.keys(AGRAVOS).map(key=>[typeLabel(key), byType(key).length]),
-    ['Fichas finalizadas', list.filter(r=>r.status==='finalizado').length],
-    ['Aguardando investigação', list.filter(r=>r.status==='aguardando_investigacao').length],
-    [],
-    ['Distribuição por sexo','Quantidade'],
-    ['Masculino', list.filter(r=>r.sexo==='M').length],
-    ['Feminino', list.filter(r=>r.sexo==='F').length],
-    ['Não informado', list.filter(r=>!r.sexo).length],
-  ], [34,18], {titleRow:0, headerRow:3});
-
-  addSheet('PLANILHA ENTRADA', [
-    ['PLANILHA DE ENTRADA — FICHAS DO SNAT'],
-    ['FICHA INVESTIGADA','PLANILHADO','AGRAVO','Nº DA FICHA','NOME','STATUS','DATA DE ATUALIZAÇÃO'],
-    ...list.map(r=>[
-      r.status==='finalizado'?'Concluída':'Aguardando investigação',
-      r.planilhado || 'NÃO',
-      typeLabel(r.agravoType),
-      r.fichaNumero || '',
-      r.patientName || '',
-      r.status || '',
-      r.updatedAt ? new Date(r.updatedAt).toLocaleString('pt-BR') : '',
-    ]),
-  ], [22,14,34,14,34,24,23], {titleRow:0, headerRow:1});
-
-  const sheetsDef = [
-    {key:'grave', name:'ACIDENTE DO TRABALHO', cols:GRAVE_COLS},
-    {key:'mental', name:'TRANSTORNO MENTAL', cols:MENTAL_COLS},
-    {key:'biologico', name:'EXPOSIÇÃO MATERIAL BIO', cols:BIOLOGICO_COLS},
-    {key:'lerdort', name:'LER DORT', cols:LERDORT_COLS},
-  ];
-  sheetsDef.forEach(sd=>{
-    const allCols = [...EXPORT_COMMON_COLS, ...sd.cols];
-    const header = allCols.map(c=>c[0]);
-    const rows = byType(sd.key).map(r=>allCols.map(c=>backupValue(c[1](r))));
-    addSheet(sd.name, [[`${sd.name} — ${list.filter(r=>r.agravoType===sd.key).length} FICHA(S)`], header, ...rows], header.map(h=>Math.min(42,Math.max(16,String(h).length+4))), {titleRow:0, headerRow:1});
-  });
-
-  const allKeys = Array.from(new Set(list.flatMap(r=>Object.keys(r))));
-  const rawHeader = ['TIPO DE AGRAVO', ...allKeys];
-  const rawRows = list.map(r=>[typeLabel(r.agravoType), ...allKeys.map(key=>backupValue(r[key]))]);
-  addSheet('FICHAS COMPLETAS', [['BACKUP INTEGRAL — TODOS OS CAMPOS'], rawHeader, ...rawRows], rawHeader.map(h=>Math.min(36,Math.max(14,String(h).length+3))), {titleRow:0, headerRow:1});
-
-  const controle = records.filter(r=>r?.controleFicha);
-  if(controle.length){
-    const keys = Array.from(new Set(controle.flatMap(r=>Object.keys(r))));
-    addSheet('CONTROLE DE FICHAS', [['CONTROLE DE DISTRIBUIÇÃO'], keys, ...controle.map(r=>keys.map(k=>backupValue(r[k])))], keys.map(k=>Math.min(34,Math.max(14,k.length+3))), {titleRow:0,headerRow:1});
-  }
-  XLSX.writeFile(wb, `backup_snat_${dateStamp}.xlsx`);
-  showToast(`Backup Excel gerado com ${list.length} ficha(s) e ${wb.SheetNames.length} aba(s).`);
+  const graveHeaders = ['STATUS INVESTIGAÇÃO','DIA DE LANÇAMENTO','LANÇADO POR :','Nº DA FICHA','DATA DO ACIDENTE','DATA DA NOTIFICAÇÃO','ANO','MÊS','UNIDADE NOTIFICADORA','NOME','DATA DE NASCIMENTO','IDADE','SEXO','COR/RAÇA','ESCOLARIDADE','MUNICIPIO DE RESIDÊNCIA','TELEFONE','SINAN','CBO','OCUPAÇÃO','SITUAÇÃO NO MERCADO DE TRABALHO','LOCAL DO ACIDENTE','EMPRESA','CNAE','ATIVIDADE ECONOMICA','MUNICIPIO DA EMPRESA','TIPO DE ACIDENTE','1 - OLHO','2 - CABEÇA','3 - PESCOÇO','4 - TORÁX','5 - ABDOME','6 - MÃO','7 - MEMBRO SUPERIOR','8 - MEMBRO INFERIOR','9 - PÉ','10 - TODO O CORPO','11 - OUTRO','CID DO ACIDENTE','CID DA LESÃO','CAT'];
+  const graveRows = byType('grave').map(r=>[status(r),dt(r,'dataLancamento'),val(r,'investigadorAssinatura'),val(r,'fichaNumero'),dt(r,'dataAcidente'),dt(r,'dataNotificacao'),val(r,'ano'),val(r,'mes'),val(r,'unidadeSaude'),val(r,'patientName'),dt(r,'dataNascimento'),idade(r),val(r,'sexo'),val(r,'racaCor'),val(r,'escolaridade'),val(r,'resMunicipio'),val(r,'resTelefone'),val(r,'numeroSinan'),val(r,'cbo'),val(r,'ocupacao'),val(r,'situacaoMercado'),val(r,'localAcidente'),val(r,'nomeEmpresa'),val(r,'cnae'),val(r,'atividadeEconomica'),val(r,'empMunicipio'),val(r,'tipoAcidente'),...PARTES_CORPO.map(p=>marked(r,'partesCorpo',p)),val(r,'causaCID10'),val(r,'diagnosticoLesaoCID10'),cat(r)]);
+  const mentalHeaders = ['DATA DE DEVOLUÇÃO PARA EPIDEMIOLOGIA','DIA DE LANÇAMENTO','LANÇADO POR :','Nº DA FICHA','UNIDADE NOTIFICADORA','DATA DO DIAGNOSTICO','DATA DA NOTIFICAÇÃO','ANO','MÊS','NOME','DATA DE NASCIMENTO','IDADE','SEXO','GESTANTE','COR/RAÇA','ESCOLARIDADE','MUNICIPIO DE RESIDÊNCIA','TELEFONE','SINAN','CBO','OCUPAÇÃO','SITUAÇÃO NO MERCADO DE TRABALHO','EMPRESA','CNAE','ATIVIDADE ECONOMICA','MUNICIPIO DA EMPRESA','O EMPREGADOR É EMPRESA TERCERIZADA','REGIME DE TRATAMENTO','DIAGNOSTICO ESPECIFICO','HABITOS','HABITO DE FUMAR','TEMPO DE EXPOSIÇÃO AO TABACO','CONDUTA GERAL','HÁ OU HOUVE OUTROS TRABALHADORES COM A MESMA DOENÇA NO LOCAL DE TRABALHO','O PACIENTE FOI ENCAMINHADO PARA O CAPES OU OUTRO TRATAMENTO DE TRANSTORNOS MENTAIS','EVOLUÇÃO DO CASO','CAT'];
+  const mentalRows = byType('mental').map(r=>[val(r,'dataDevolucaoEpidemio'),dt(r,'dataLancamento'),val(r,'investigadorAssinatura'),val(r,'fichaNumero'),val(r,'unidadeSaude'),dt(r,'dataDiagnosticoMental'),dt(r,'dataNotificacao'),val(r,'ano'),val(r,'mes'),val(r,'patientName'),dt(r,'dataNascimento'),idade(r),val(r,'sexo'),val(r,'gestante'),val(r,'racaCor'),val(r,'escolaridade'),val(r,'resMunicipio'),val(r,'resTelefone'),val(r,'numeroSinan'),val(r,'cbo'),val(r,'ocupacao'),val(r,'situacaoMercado'),val(r,'nomeEmpresa'),val(r,'cnae'),val(r,'atividadeEconomica'),val(r,'empMunicipio'),val(r,'empregadorTerceirizada'),val(r,'regimeTratamentoMental'),val(r,'diagnosticoCID10'),val(r,'habitos'),val(r,'habitoFumar'),val(r,'tempoExposicaoTabaco'),val(r,'condutaGeralMental'),val(r,'outrosTrabalhadoresMesmaDoenca'),val(r,'encaminhadoCAPS'),val(r,'evolucaoCaso'),cat(r)]);
+  const bioHeaders = ['DATA DE DEVOLUÇÃO PARA EPIDEMIOLOGIA','DIA DE LANÇAMENTO','LANÇADO POR :','Nº DA FICHA','DATA DO ACIDENTE','DATA DA NOTIFICAÇÃO','ANO','MÊS','UNIDADE NOTIFICADORA','NOME','DATA DE NASCIMENTO','IDADE','SEXO','COR/RAÇA','ESCOLARIDADE','MUNICIPIO DE RESIDÊNCIA','TELENOFE','SINAN','CBO','OCUPAÇÃO','SITUAÇÃO NO MERCADO DE TRABALHO','EMPRESA','CNAE','ATIVIDADE ECONOMICA','MUNICIPIO DA EMPRESA','EMPRESA TERCERIZADA','TIPO DE EXPOSIÇÃO','MATERIAL ORGANICO','CIRCUNSTANCIAS DO ACIDENTE','AGENTE','USO DO EPI','SITUAÇÃO VACINAL DO ACIDENTADO HEPATITE B','ANTI-HIV','HBSAG','ANTI-HBS','ANTI-HCV','DADOS DO PACIENTE FONTE','HBSAG.','ANTI-HIV.','ANTI-HBC.','ANTI-HCV.','CONDUTA NO MOMENTO DO ACIDENTE','EVOLUÇÃO DO CASO','CAT','STATUS INVESTIGAÇÃO'];
+  const bioRows = byType('biologico').map(r=>[val(r,'dataDevolucaoEpidemio'),dt(r,'dataLancamento'),val(r,'investigadorAssinatura'),val(r,'fichaNumero'),dt(r,'dataAcidenteBio'),dt(r,'dataNotificacao'),val(r,'ano'),val(r,'mes'),val(r,'unidadeSaude'),val(r,'patientName'),dt(r,'dataNascimento'),idade(r),val(r,'sexo'),val(r,'racaCor'),val(r,'escolaridade'),val(r,'resMunicipio'),val(r,'resTelefone'),val(r,'numeroSinan'),val(r,'cbo'),val(r,'ocupacao'),val(r,'situacaoMercado'),val(r,'nomeEmpresa'),val(r,'cnae'),val(r,'atividadeEconomica'),val(r,'empMunicipio'),val(r,'empregadorTerceirizada'),val(r,'tipoExposicao'),val(r,'materialOrganico'),val(r,'circunstanciaAcidente'),val(r,'agenteBiologico'),val(r,'usoEPI'),val(r,'situacaoVacinalHepB'),val(r,'examAntiHIV'),val(r,'examHbsAg'),val(r,'examAntiHBs'),val(r,'examAntiHCV'),val(r,'pacienteFonteConhecida'),val(r,'fonteHbsAg'),val(r,'fonteAntiHIV'),val(r,'fonteAntiHBc'),val(r,'fonteAntiHCV'),val(r,'condutaMomentoAcidente'),val(r,'evolucaoCaso'),cat(r),status(r)]);
+  const ldHeaders = ['DATA DE DEVOLUÇÃO PARA EPIDEMIOLOGIA','STATUS DA INVESTIGAÇÃO','DIA DE LANÇAMENTO','LANÇADO POR :','Nº DA FICHA','CODIGO CID','DATA DO DIAGNOSTICO','DATA DA NOTIFICAÇÃO','ANO','MÊS','UNIDADE NOTIFICADORA','NOME','DATA DE NASCIMENTO','IDADE','SEXO','GESTANTE','COR/RAÇA','ESCOLARIDADE','MUNICIPIO DE RESIDÊNCIA','TELEFONE','SINAN','CBO','OCUPAÇÃO','SITUAÇÃO NO MERCADO DE TRABALHO','EMPRESA','CNAE','ATIVIDADE ECONOMICA','MUNICIPIO DA EMPRESA','O EMPREGADO É DE EMPRESA TERCERIZADA','AGRAVOS ASSOCIADOS','REGIME DE TRATAMENTO','SINAIS E SINTOMAS','LIMITAÇÃO E INCAPACIDADE PARA EXERCICIO DE TAREFAS','O PACIENTE ESTÁ EXPOSTO EM SEU LOCAL DE TRABALHO À:','DIAGNOSTICO ESPECIFICO (CID)','HOUVE AFASTAMENTO DO TRABALHO PARA TRATAMENTO','COM AFASTAMENTO DO TRABALHO','HÁ OU HOUVE OUTROS TRABALHADORES COM A MESMA DOENÇA NO LOCAL DE TRABALHO','CONDUTA GERAL','EVOLUÇÃO DO CASO','CAT'];
+  const ldRows = byType('lerdort').map(r=>[val(r,'dataDevolucaoEpidemio'),status(r),dt(r,'dataLancamento'),val(r,'investigadorAssinatura'),val(r,'fichaNumero'),val(r,'codigoCID')||val(r,'diagnosticoCID10'),dt(r,'dataDiagnosticoLD'),dt(r,'dataNotificacao'),val(r,'ano'),val(r,'mes'),val(r,'unidadeSaude'),val(r,'patientName'),dt(r,'dataNascimento'),idade(r),val(r,'sexo'),val(r,'gestante'),val(r,'racaCor'),val(r,'escolaridade'),val(r,'resMunicipio'),val(r,'resTelefone'),val(r,'numeroSinan'),val(r,'cbo'),val(r,'ocupacao'),val(r,'situacaoMercado'),val(r,'nomeEmpresa'),val(r,'cnae'),val(r,'atividadeEconomica'),val(r,'empMunicipio'),val(r,'empregadorTerceirizada'),val(r,'agravosAssociados'),val(r,'regimeTratamentoLD'),val(r,'sinaisSintomas'),val(r,'limitacaoIncapacidade'),val(r,'exposicaoTrabalho'),val(r,'diagnosticoCID10'),val(r,'houveAfastamentoTratamento'),val(r,'tempoAfastamentoTrabalho'),val(r,'outrosTrabalhadoresMesmaDoenca'),val(r,'condutaGeral'),val(r,'evolucaoCaso'),cat(r)]);
+  addSheet('Dashboard',['Indicador','Quantidade'],[['Total de fichas',list.length],...Object.keys(AGRAVOS).map(k=>[typeLabel(k),byType(k).length])],'DASHBOARD CONTROLE DE ACIDENTES E INCIDENTES');
+  addSheet('PLANILHA ENTRADA',['FICHA INVESTIGADA','PLANILHADO','AGRAVO','Nº DA FICHA','NOME'],list.map(r=>[status(r),val(r,'planilhado','NÃO'),r.agravoType==='grave'?'AT':r.agravoType==='biologico'?'ATMB':r.agravoType==='mental'?'ATMRT':'LER/DORT',val(r,'fichaNumero'),val(r,'patientName')]),'PLANILHA ENTRADA');
+  addSheet('ACIDENTE DO TRABALHO',graveHeaders,graveRows,'ACIDENTE DO TRABALHO');
+  addSheet('TRANSTORNO MENTAL',mentalHeaders,mentalRows,'TRANSTORNO MENTAL');
+  addSheet('EXPOSIÇÃO MATERIAL BIO',bioHeaders,bioRows,'EXPOSIÇÃO A MATERIAL BIOLOGICO');
+  addSheet('LER DORT',ldHeaders,ldRows,'LER DORT');
+  const devolvidas = list.filter(r=>r.dataDevolucaoEpidemio);
+  addSheet('FOLHA DE ENVIO EPIDEMIO',['AGRAVO','Nº DA FICHA','NOME','DATA DE RECEBIMENTO DA DEVOLUÇÃO DAS FICHAS','ASSINATURA'],devolvidas.map(r=>[r.agravoType==='grave'?'AT':r.agravoType==='biologico'?'ATMB':r.agravoType==='mental'?'ATMRT':'LER/DORT',val(r,'fichaNumero'),val(r,'patientName'),dt(r,'dataDevolucaoEpidemio'),'']), 'TRÂMITE DE NOTIFICAÇÕES DEVOLVIDAS PARA EPIDEMIOLOGIA - ACIDENTE DE TRABALHO');
+  XLSX.writeFile(wb, `PLANILHAMACRO2026-FICHADEACIDENTESDETRABALHO_${new Date().toISOString().slice(0,10)}.xlsx`);
+  showToast(`Backup no padrão da planilha anexada gerado com ${list.length} ficha(s).`);
 }
 
 /* ============================= FORMULÁRIO ============================= */
