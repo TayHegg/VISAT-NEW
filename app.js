@@ -4802,9 +4802,9 @@ function renderConsulta(){
         <option value="amber" ${tableState.filterStatus==='amber'?'selected':''}>Atenção</option>
         <option value="green" ${tableState.filterStatus==='green'?'selected':''}>OK</option>
       </select>
-      <button class="btn btn-ghost btn-sm" onclick="exportExcel()">
+      <button class="btn btn-ghost btn-sm" onclick="exportExcel()" title="Baixar backup completo em Excel com todas as fichas e abas do modelo">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
-        Exportar Excel
+        Baixar backup Excel
       </button>
     </div>
     ${all.length ? `<table>
@@ -5120,31 +5120,111 @@ const BIOLOGICO_COLS = [
   ['Nome do Digitador', r=>r.investigadorAssinatura||''],
 ];
 
+function backupExcelCellStyle(kind){
+  const palette = {
+    title:{fill:{fgColor:{rgb:'0D3B3E'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:14},alignment:{horizontal:'center',vertical:'center'}},
+    header:{fill:{fgColor:{rgb:'176B6E'}},font:{bold:true,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',vertical:'center',wrapText:true},border:{bottom:{style:'medium',color:{rgb:'0D3B3E'}}}},
+    subheader:{fill:{fgColor:{rgb:'DDEFEA'}},font:{bold:true,color:{rgb:'0D3B3E'}},alignment:{vertical:'center',wrapText:true}},
+    body:{alignment:{vertical:'top',wrapText:true},border:{bottom:{style:'thin',color:{rgb:'D9E3E1'}}}},
+    accent:{fill:{fgColor:{rgb:'EAF5F2'}},font:{bold:true,color:{rgb:'0D3B3E'}}},
+  };
+  return palette[kind] || palette.body;
+}
+
+function styleBackupSheet(ws, opts={}){
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+  const headerRow = opts.headerRow ?? 1;
+  const titleRow = opts.titleRow ?? 0;
+  for(let r=range.s.r; r<=range.e.r; r++){
+    for(let c=range.s.c; c<=range.e.c; c++){
+      const cell = ws[XLSX.utils.encode_cell({r,c})];
+      if(!cell) continue;
+      cell.s = backupExcelCellStyle(r===titleRow ? 'title' : r===headerRow ? 'header' : 'body');
+    }
+  }
+  if(opts.titleRow !== undefined) ws['!rows'] = [{hpt:28},{hpt:34}];
+  if(opts.headerRow !== undefined && opts.titleRow === undefined) ws['!rows'] = [{hpt:34}];
+  ws['!freeze'] = {xSplit:0,ySplit:headerRow+1};
+  if(range.e.r >= headerRow) ws['!autofilter'] = {ref:XLSX.utils.encode_range({s:{r:headerRow,c:range.s.c},e:range.e})};
+}
+
+function backupValue(value){
+  if(value===undefined || value===null) return '';
+  if(Array.isArray(value)) return value.join(', ');
+  if(typeof value === 'object') return value.name || JSON.stringify(value);
+  return value;
+}
+
 function exportExcel(){
-  const list = getFilteredRecords();
-  if(!list.length){ showToast('Nada para exportar.'); return; }
+  const list = records.filter(r=>r && !r.controleFicha);
+  if(!list.length){ showToast('Não há fichas cadastradas para gerar o backup.'); return; }
   if(typeof XLSX === 'undefined'){ showToast('Não foi possível carregar a biblioteca de exportação. Verifique sua conexão com a internet.'); return; }
-  const sheetsDef = [
-    {key:'grave', name:'Acidente Grave', cols: GRAVE_COLS},
-    {key:'biologico', name:'Exposição Biológica', cols: BIOLOGICO_COLS},
-    {key:'mental', name:'Transtorno Mental', cols: MENTAL_COLS},
-    {key:'lerdort', name:'LER-DORT', cols: LERDORT_COLS},
-  ];
   const wb = XLSX.utils.book_new();
-  let anySheet = false;
+  const addSheet = (name, aoa, widths, opts={})=>{
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = widths.map(w=>({wch:w}));
+    styleBackupSheet(ws, opts);
+    XLSX.utils.book_append_sheet(wb, ws, name.slice(0,31));
+  };
+  const byType = key=>list.filter(r=>r.agravoType===key);
+  const typeLabel = key=>AGRAVOS[key]?.label || key;
+  const dateStamp = new Date().toISOString().slice(0,10);
+
+  addSheet('Dashboard', [
+    ['DASHBOARD — BACKUP SNAT'],
+    ['Gerado em', new Date().toLocaleString('pt-BR')],
+    [],
+    ['Indicador','Quantidade'],
+    ['Total de fichas', list.length],
+    ...Object.keys(AGRAVOS).map(key=>[typeLabel(key), byType(key).length]),
+    ['Fichas finalizadas', list.filter(r=>r.status==='finalizado').length],
+    ['Aguardando investigação', list.filter(r=>r.status==='aguardando_investigacao').length],
+    [],
+    ['Distribuição por sexo','Quantidade'],
+    ['Masculino', list.filter(r=>r.sexo==='M').length],
+    ['Feminino', list.filter(r=>r.sexo==='F').length],
+    ['Não informado', list.filter(r=>!r.sexo).length],
+  ], [34,18], {titleRow:0, headerRow:3});
+
+  addSheet('PLANILHA ENTRADA', [
+    ['PLANILHA DE ENTRADA — FICHAS DO SNAT'],
+    ['FICHA INVESTIGADA','PLANILHADO','AGRAVO','Nº DA FICHA','NOME','STATUS','DATA DE ATUALIZAÇÃO'],
+    ...list.map(r=>[
+      r.status==='finalizado'?'Concluída':'Aguardando investigação',
+      r.planilhado || 'NÃO',
+      typeLabel(r.agravoType),
+      r.fichaNumero || '',
+      r.patientName || '',
+      r.status || '',
+      r.updatedAt ? new Date(r.updatedAt).toLocaleString('pt-BR') : '',
+    ]),
+  ], [22,14,34,14,34,24,23], {titleRow:0, headerRow:1});
+
+  const sheetsDef = [
+    {key:'grave', name:'ACIDENTE DO TRABALHO', cols:GRAVE_COLS},
+    {key:'mental', name:'TRANSTORNO MENTAL', cols:MENTAL_COLS},
+    {key:'biologico', name:'EXPOSIÇÃO MATERIAL BIO', cols:BIOLOGICO_COLS},
+    {key:'lerdort', name:'LER DORT', cols:LERDORT_COLS},
+  ];
   sheetsDef.forEach(sd=>{
-    const recs = list.filter(r=>r.agravoType===sd.key);
     const allCols = [...EXPORT_COMMON_COLS, ...sd.cols];
     const header = allCols.map(c=>c[0]);
-    const data = recs.map(r => allCols.map(c => { const v = c[1](r); return (v===undefined||v===null) ? '' : v; }));
-    const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
-    ws['!cols'] = header.map(()=>({wch:24}));
-    XLSX.utils.book_append_sheet(wb, ws, sd.name);
-    if(recs.length) anySheet = true;
+    const rows = byType(sd.key).map(r=>allCols.map(c=>backupValue(c[1](r))));
+    addSheet(sd.name, [[`${sd.name} — ${list.filter(r=>r.agravoType===sd.key).length} FICHA(S)`], header, ...rows], header.map(h=>Math.min(42,Math.max(16,String(h).length+4))), {titleRow:0, headerRow:1});
   });
-  if(!anySheet){ showToast('Nenhum registro nos tipos de agravo disponíveis para exportação.'); }
-  XLSX.writeFile(wb, 'notificacoes_acidentes_trabalho.xlsx');
-  showToast('Excel exportado com sucesso.');
+
+  const allKeys = Array.from(new Set(list.flatMap(r=>Object.keys(r))));
+  const rawHeader = ['TIPO DE AGRAVO', ...allKeys];
+  const rawRows = list.map(r=>[typeLabel(r.agravoType), ...allKeys.map(key=>backupValue(r[key]))]);
+  addSheet('FICHAS COMPLETAS', [['BACKUP INTEGRAL — TODOS OS CAMPOS'], rawHeader, ...rawRows], rawHeader.map(h=>Math.min(36,Math.max(14,String(h).length+3))), {titleRow:0, headerRow:1});
+
+  const controle = records.filter(r=>r?.controleFicha);
+  if(controle.length){
+    const keys = Array.from(new Set(controle.flatMap(r=>Object.keys(r))));
+    addSheet('CONTROLE DE FICHAS', [['CONTROLE DE DISTRIBUIÇÃO'], keys, ...controle.map(r=>keys.map(k=>backupValue(r[k])))], keys.map(k=>Math.min(34,Math.max(14,k.length+3))), {titleRow:0,headerRow:1});
+  }
+  XLSX.writeFile(wb, `backup_snat_${dateStamp}.xlsx`);
+  showToast(`Backup Excel gerado com ${list.length} ficha(s) e ${wb.SheetNames.length} aba(s).`);
 }
 
 /* ============================= FORMULÁRIO ============================= */
