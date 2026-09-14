@@ -11,6 +11,7 @@ const AGRAVOS = {
 const STATUS_OPTIONS = [
   ['finalizado','Finalizado'],
   ['aguardando_investigacao','Aguardando investigação'],
+  ['aguardando_digitacao','Aguardando Digitação'],
 ];
 
 // Base de CID-10 relevante à saúde do trabalhador (referência local — não substitui a tabela oficial completa do DATASUS)
@@ -2664,6 +2665,7 @@ let dashFilters = { ano:'2026', periodoIni:'', periodoFim:'', mes:'', agravo:'',
 let bmSelectedRegion = null;
 let pendingDeleteId = null;
 let dashboardCardFilter = '';
+let digitacaoDrawerOpen = false;
 let analyticsCardFilter = null;
 
 let controleFichas = [];
@@ -4643,7 +4645,21 @@ function setDashboardCardFilter(filter){
   dashboardCardFilter = dashboardCardFilter === filter ? '' : filter;
   render();
 }
-
+function toggleDigitacaoDrawer(){
+  digitacaoDrawerOpen = !digitacaoDrawerOpen;
+  render();
+}
+function digitacaoRecords(){
+  return operationalRecords().filter(r=>r.status==='aguardando_digitacao' && r.pdfFicha);
+}
+function renderDigitacaoDrawer(){
+  if(!digitacaoDrawerOpen) return '';
+  const list=digitacaoRecords();
+  return `<div class="digitacao-drawer" role="dialog" aria-label="Fichas aguardando digitação">
+    <div class="digitacao-drawer-header"><div><strong>Aguardando Digitação</strong><span>${list.length} ficha(s) com PDF anexado</span></div><button type="button" class="btn btn-ghost btn-sm" onclick="toggleDigitacaoDrawer()">Fechar</button></div>
+    <div class="digitacao-drawer-body">${list.length ? `<div class="selection-list">${list.map(r=>`<div class="selection-item" onclick="goTo('form','${esc(r.id)}')"><div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span></div><div class="selection-item-meta"><span class="badge amber">PDF anexado</span><span>Completar digitação →</span></div></div>`).join('')}</div>` : '<div class="empty-mini">Nenhuma ficha aguardando digitação.</div>'}</div>
+  </div>`;
+}
 function renderDashboardSelection(list, filter){
   if(!filter) return '';
   const labels = {all:'Todas as fichas', red:'Fichas com pendência crítica', amber:'Fichas com pendência de atenção', green:'Fichas sem pendências'};
@@ -4672,6 +4688,7 @@ function renderDashboard(){
   const nRed = withAlerts.filter(x=>x.level==='red').length;
   const nAmber = withAlerts.filter(x=>x.level==='amber').length;
   const nGreen = withAlerts.filter(x=>x.level==='green').length;
+  const nDigitacao = digitacaoRecords().length;
   const nCatPend = sourceRecords.filter(r=>!isImportedRecord(r) && r.agravoType==='grave' && r.foiEmitidaCAT==='2').length;
 
   if(!sourceRecords.length){
@@ -4708,6 +4725,7 @@ function renderDashboard(){
       <div class="stat-card red is-clickable ${dashboardCardFilter==='red'?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas com pendência crítica" onclick="setDashboardCardFilter('red')"><div class="n">${nRed}</div><div class="l">Com pendência crítica</div></div>
       <div class="stat-card amber is-clickable ${dashboardCardFilter==='amber'?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas com pendência de atenção" onclick="setDashboardCardFilter('amber')"><div class="n">${nAmber}</div><div class="l">Com pendência de atenção</div></div>
       <div class="stat-card green is-clickable ${dashboardCardFilter==='green'?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas sem pendências" onclick="setDashboardCardFilter('green')"><div class="n">${nGreen}</div><div class="l">Sem pendências</div></div>
+      <div class="stat-card digitacao-card is-clickable ${digitacaoDrawerOpen?'selected':''}" role="button" tabindex="0" title="Abrir fichas que possuem somente o PDF anexado" onclick="toggleDigitacaoDrawer()"><div class="n">${nDigitacao}</div><div class="l">Aguardando Digitação</div></div>
     </div>
     ${renderDashboardSelection(dashboardSelection, dashboardCardFilter)}
     <div class="panel">
@@ -4718,6 +4736,7 @@ function renderDashboard(){
       <h2>Registros recentes</h2>
       ${renderMiniTable(sourceRecords.slice().sort((a,b)=> new Date(b.createdAt)-new Date(a.createdAt)).slice(0,6))}
     </div>
+    ${renderDigitacaoDrawer()}
   `;
 }
 function renderMiniTable(list){
@@ -4792,7 +4811,7 @@ function renderBatchImportModal(){
   const warn = items.filter(x=>x.status==='warn').length;
   const bad = items.filter(x=>x.status==='bad').length;
   const rows = items.length ? items.map((item,index)=>{
-    const statusText = item.status==='ok' ? `Pronto para anexar à ficha ${item.record?.fichaNumero}` : item.status==='new' ? `Ficha ${item.number} não existe: será criada como “Aguardando investigação” e ficará disponível para digitação/complementação` : item.status==='warn' ? (item.record?.pdfFicha ? 'Já existe PDF anexado; não será substituído' : `Divergência de nome: sistema tem “${item.record?.patientName || 'sem nome'}”`) : 'Sem correspondência ou nome fora do padrão';
+    const statusText = item.status==='ok' ? `Pronto para anexar à ficha ${item.record?.fichaNumero}` : item.status==='new' ? `Ficha ${item.number} não existe: será criada como “Aguardando Digitação” e ficará disponível para digitação/complementação` : item.status==='warn' ? (item.record?.pdfFicha ? 'Já existe PDF anexado; não será substituído' : `Divergência de nome: sistema tem “${item.record?.patientName || 'sem nome'}”`) : 'Sem correspondência ou nome fora do padrão';
     return `<label class="batch-import-item ${item.status}"><input type="checkbox" data-batch-index="${index}" ${item.status==='ok'||item.status==='new'?'checked':''} ${item.status==='ok'||item.status==='new'?'':'disabled'}><span><strong>${esc(item.displayName)}</strong><small>${esc(statusText)}</small></span></label>`;
   }).join('') : '<div class="empty-state" style="padding:24px">Selecione um arquivo ZIP para analisar.</div>';
   return `<div class="modal-bg" id="batchImportModal" onclick="if(event.target===this)closeBatchImport()"><div class="modal batch-import-modal">
@@ -4838,7 +4857,7 @@ async function processBatchImport(){
   let success=0; const created=[]; const attached=[]; const errors=[];
   for(const item of selectedItems){
     try{
-      const baseRecord=item.record || {id:uid(), fichaNumero:item.number, patientName:item.patientName, agravoType:item.agravoType || 'grave', status:'aguardando_investigacao', anoReferencia:OPERATIONAL_YEAR, createdAt:new Date().toISOString()};
+      const baseRecord=item.record || {id:uid(), fichaNumero:item.number, patientName:item.patientName, agravoType:item.agravoType || 'grave', status:'aguardando_digitacao', anoReferencia:OPERATIONAL_YEAR, createdAt:new Date().toISOString()};
       const attachment=await uploadPdfAttachment(baseRecord.id,item.file);
       const updated={...baseRecord,pdfFicha:attachment};
       if(!await upsertRecordRemote(updated)) throw new Error('falha ao salvar a ficha');
