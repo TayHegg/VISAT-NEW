@@ -5498,7 +5498,6 @@ function renderPdfUpload(){
       <button type="button" class="btn btn-ghost btn-sm pdf-view-btn" onclick="previewCurrentPdf()" ${canPreview?'':'disabled'}>${pdfPreviewState.open?'Fechar visualização':'Visualizar ficha'}</button>
     </div>
     <span class="hint ${pdfAttachmentState.error?'pdf-error':''}" id="pdfFichaStatus">${esc(status)}</span>
-    <div id="pdfPreviewPanelHost">${renderPdfPreviewPanel()}</div>
   </div>`;
 }
 function formatFileSize(bytes){
@@ -6418,6 +6417,7 @@ function renderForm(){
         </div>
       </div>
     </form>
+    <div id="pdfPreviewPanelHost">${renderPdfPreviewPanel()}</div>
   `;
 }
 function switchPage(p){
