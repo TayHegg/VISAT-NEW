@@ -3326,7 +3326,6 @@ async function submitControleDistribuicao(event){
   const rejected = [];
   for(const value of values){
     const numero = modo === 'numero' ? normalizeControleFicha(value) : '';
-    const nome = modo === 'nome' ? normalizeDuplicateText(value) : '';
     const linkedMatches = modo === 'nome' ? findLinkedRecordsByName(value) : [];
     const controleMatches = modo === 'nome' ? findControleFichasByName(value) : [];
     const current = modo === 'nome' ? (controleMatches.length === 1 ? controleMatches[0] : null) : findControleFichaByNumero(numero);
@@ -3334,10 +3333,6 @@ async function submitControleDistribuicao(event){
     const isNew = !current;
     if(modo === 'nome' && (linkedMatches.length > 1 || controleMatches.length > 1)){
       rejected.push(`${value} (nome duplicado — informe o número)`);
-      continue;
-    }
-    if(!current && !linked){
-      rejected.push(value);
       continue;
     }
     const now = new Date().toISOString();
