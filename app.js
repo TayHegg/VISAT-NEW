@@ -4716,6 +4716,27 @@ function toggleDigitacaoDrawer(){
 function digitacaoRecords(){
   return operationalRecords().filter(r=>r.status==='aguardando_digitacao' && r.pdfFicha);
 }
+function controleFichaLinkedOccurrence(item){
+  const byNumber = findLinkedRecord(item?.numeroFicha);
+  if(byNumber) return byNumber;
+  const name = controleFichaPatientName(item);
+  return name ? findLinkedRecordsByName(name)[0] || null : null;
+}
+function controleFichasSemOcorrencia(){
+  return operationalControleFichas().filter(item=>!controleFichaLinkedOccurrence(item));
+}
+function renderControleConferenciaBox(){
+  const controleTotal = operationalControleFichas().length;
+  const ocorrenciasTotal = operationalRecords().length;
+  const semOcorrencia = controleFichasSemOcorrencia();
+  const digitacao = digitacaoRecords();
+  const missingRows = semOcorrencia.map(item=>`<div class="controle-conferencia-row"><span><b>${esc(item.numeroFicha || 'S/N')}</b> — ${esc(controleFichaPatientName(item) || 'Nome não informado')}</span><small>Sem ocorrência correspondente no Dashboard</small></div>`).join('');
+  return `<div class="panel controle-conferencia-panel">
+    <div class="controle-conferencia-head"><div><h2>Conferência das fichas</h2><div class="hint">Comparação automática entre o Controle de Ficha e as ocorrências cadastradas no Dashboard Analítico.</div></div><span class="controle-conferencia-badge">${semOcorrencia.length} sem ocorrência</span></div>
+    <div class="controle-conferencia-stats"><div><b>${controleTotal}</b><span>Controle de Ficha</span></div><div><b>${ocorrenciasTotal}</b><span>Ocorrências no Dashboard</span></div><div><b>${digitacao.length}</b><span>Aguardando digitação</span></div></div>
+    ${semOcorrencia.length ? `<details class="controle-conferencia-details"><summary>Ver fichas que não aparecem no Dashboard <span>${semOcorrencia.length}</span></summary><div class="controle-conferencia-list">${missingRows}</div></details>` : '<div class="controle-conferencia-ok">Todas as fichas do Controle de Ficha possuem ocorrência correspondente no Dashboard.</div>'}
+  </div>`;
+}
 function renderDigitacaoDrawer(){
   if(!digitacaoDrawerOpen) return '';
   const list=digitacaoRecords();
@@ -4792,6 +4813,7 @@ function renderDashboard(){
       <div class="stat-card digitacao-card is-clickable ${digitacaoDrawerOpen?'selected':''}" role="button" tabindex="0" title="Abrir fichas que possuem somente o PDF anexado" onclick="toggleDigitacaoDrawer()"><div class="n">${nDigitacao}</div><div class="l">Aguardando Digitação</div></div>
     </div>
     ${renderDashboardSelection(dashboardSelection, dashboardCardFilter)}
+    ${renderControleConferenciaBox()}
     <div class="panel">
       <h2><span class="dot red"></span> Alertas ativos ${nCatPend? `<span style="font-weight:400;color:var(--text-muted);font-size:12px">— ${nCatPend} CAT não emitida(s)</span>`:''}</h2>
       ${alertCards.length ? alertCards.join('') : '<div style="color:var(--text-muted);font-size:13px">Nenhum alerta ativo. Todos os registros estão em dia.</div>'}

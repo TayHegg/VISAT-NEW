@@ -768,11 +768,25 @@ tr:hover td{background:var(--surface-2);}
 .controle-distribuicao-form textarea{min-height:60px;resize:vertical;}
 .controle-distribuicao-submit{display:flex;align-items:end;height:100%;}
 .controle-distribuicao-submit .btn{height:38px;white-space:nowrap;}
+.controle-conferencia-panel{border-left:3px solid #2e6fb0;}
+.controle-conferencia-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;}
+.controle-conferencia-badge{padding:6px 10px;border:1px solid #e4aaa5;border-radius:6px;background:#fff1ef;color:#8a2e29;font:700 11px var(--font-mono);white-space:nowrap;}
+.controle-conferencia-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:16px;}
+.controle-conferencia-stats>div{display:flex;flex-direction:column;gap:3px;padding:12px;border:1px solid var(--border);border-radius:7px;background:var(--surface-2);}
+.controle-conferencia-stats b{font:700 24px var(--font-mono);color:var(--primary);}
+.controle-conferencia-stats span{font-size:11px;color:var(--text-muted);}
+.controle-conferencia-details{margin-top:14px;border-top:1px solid var(--border);padding-top:12px;}
+.controle-conferencia-details summary{cursor:pointer;color:var(--primary);font-weight:700;font-size:13px;}
+.controle-conferencia-details summary span{display:inline-flex;min-width:22px;justify-content:center;margin-left:5px;padding:2px 6px;border-radius:10px;background:var(--red-bg);color:#8a2e29;font:700 11px var(--font-mono);}
+.controle-conferencia-list{display:grid;gap:6px;margin-top:10px;max-height:260px;overflow:auto;}
+.controle-conferencia-row{display:flex;justify-content:space-between;gap:12px;padding:8px 10px;border-radius:6px;background:var(--surface-2);font-size:12px;}
+.controle-conferencia-row small{color:#8a2e29;text-align:right;}
+.controle-conferencia-ok{margin-top:14px;padding:10px;border-radius:6px;background:var(--green-bg);color:#14634f;font-size:12px;}
 .controle-destino-chip{display:inline-flex;align-items:center;margin-top:6px;padding:4px 8px;border:2px solid #efa92b;border-radius:5px;background:#fff1d2;color:#875600;font:700 10px var(--font-body);line-height:1.1;white-space:nowrap;}
 .alert-card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .alert-card-head .controle-destino-chip{margin-top:0;}
 @media (max-width:980px){.consulta-quick-grid{grid-template-columns:1fr;}.controle-pesquisa-grid{grid-template-columns:1fr;}.controle-pesquisa-field>.btn{flex:0 0 auto;}.producao-page-header,.producao-form-header{flex-direction:column;}.producao-page-header .btn,.producao-form-header .btn{width:100%;justify-content:center;}.producao-header-actions{width:100%;}.producao-header-actions .btn{flex:1;}.producao-filter-panel{align-items:stretch;flex-direction:column;gap:8px;}.producao-filter-panel .field{max-width:none;}.producao-filter-panel>.hint{padding-bottom:0;}.controle-distribuicao-form{grid-template-columns:1fr 1fr;}.controle-distribuicao-numeros{grid-column:1 / -1;}.controle-distribuicao-submit{grid-column:1 / -1;}.controle-distribuicao-submit .btn{width:100%;justify-content:center;}}
-@media (max-width:640px){.controle-pesquisa-field{align-items:stretch;flex-direction:column;}.controle-pesquisa-field>.btn{width:100%;}.controle-distribuicao-form{grid-template-columns:1fr;}.controle-distribuicao-numeros,.controle-distribuicao-submit{grid-column:auto;}.controle-distribuicao-mark{align-self:flex-start;}}
+@media (max-width:640px){.controle-pesquisa-field{align-items:stretch;flex-direction:column;}.controle-pesquisa-field>.btn{width:100%;}.controle-distribuicao-form{grid-template-columns:1fr;}.controle-distribuicao-numeros,.controle-distribuicao-submit{grid-column:auto;}.controle-distribuicao-mark{align-self:flex-start;}.controle-conferencia-head{flex-direction:column;}.controle-conferencia-stats{grid-template-columns:1fr;}.controle-conferencia-row{flex-direction:column;gap:4px;}.controle-conferencia-row small{text-align:left;}}
 .controle-modal{max-width:620px;}
 .controle-modal form{display:flex;flex-direction:column;gap:0;}
 @media (max-width:700px){.controle-heading{flex-direction:column;}.controle-heading .btn{width:100%;justify-content:center;}.controle-tabs{display:grid;grid-template-columns:1fr 1fr;}.controle-tab{text-align:left;}}
