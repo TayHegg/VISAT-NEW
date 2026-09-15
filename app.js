@@ -3133,6 +3133,16 @@ function findLinkedRecord(numero){
   if(!key) return null;
   return operationalRecords().find(r => normalizeControleFicha(r.fichaNumero) === key) || null;
 }
+function findLinkedRecordsByName(nome){
+  const key = normalizeDuplicateText(nome);
+  if(!key) return [];
+  return operationalRecords().filter(r => normalizeDuplicateText(r.patientName) === key);
+}
+function findControleFichasByName(nome){
+  const key = normalizeDuplicateText(nome);
+  if(!key) return [];
+  return operationalControleFichas().filter(item => normalizeDuplicateText(controleFichaPatientName(item)) === key);
+}
 function controleFichaStatusDate(item){
   if(item.status === 'devolvida') return item.dataDevolucaoEpidemio || item.dataStatusAtual || item.dataRecebimentoEpidemio;
   if(item.status === 'com_enfermeiro') return item.dataAtribuicaoEnfermeiro || item.dataStatusAtual || item.dataRecebimentoEpidemio;
@@ -3266,11 +3276,12 @@ function renderControleFichas(){
     ${renderControlePrazoAlert()}
     <div class="panel controle-distribuicao-panel">
       <div class="controle-heading">
-        <div><h2>Distribuição de Fichas</h2><div class="hint">Informe vários números separados por vírgula e escolha para onde as fichas foram distribuídas.</div></div>
+        <div><h2>Distribuição de Fichas</h2><div class="hint">Informe vários números ou nomes, um por linha, e escolha para onde as fichas foram distribuídas.</div></div>
         <span class="controle-distribuicao-mark">Distribuição em lote</span>
       </div>
       <form class="controle-distribuicao-form" id="controleDistribuicaoForm" onsubmit="submitControleDistribuicao(event)">
-        <div class="field controle-distribuicao-numeros"><label for="controleDistribuicaoNumeros">Nº das fichas <span class="req">*</span></label><textarea id="controleDistribuicaoNumeros" name="numeros" rows="2" placeholder="Ex.: 358, 368, 475, 125, 65" required></textarea><div class="hint">Você pode separar por vírgula, ponto e vírgula ou quebra de linha.</div></div>
+        <div class="field"><label for="controleDistribuicaoModo">Identificar fichas por <span class="req">*</span></label><select id="controleDistribuicaoModo" name="modo" required><option value="numero">Número da ficha</option><option value="nome">Nome da pessoa</option></select></div>
+        <div class="field controle-distribuicao-numeros"><label for="controleDistribuicaoNumeros">Números ou nomes <span class="req">*</span></label><textarea id="controleDistribuicaoNumeros" name="numeros" rows="2" placeholder="Números: 358, 368, 475&#10;Nomes: um por linha" required></textarea><div class="hint">Por número, separe por vírgula, ponto e vírgula ou quebra de linha. Por nome, use um nome completo por linha.</div></div>
         <div class="field"><label for="controleDistribuicaoDestino">Distribuir para <span class="req">*</span></label><select id="controleDistribuicaoDestino" name="destino" required><option value="">Selecione o destino</option>${CONTROLE_FICHA_DESTINATIONS.map(destino=>`<option value="${esc(destino)}">${esc(destino)}</option>`).join('')}</select></div>
         <div class="field"><label for="controleDistribuicaoData">Data da distribuição <span class="req">*</span></label><input id="controleDistribuicaoData" name="dataDistribuicao" type="date" value="${todayISO()}" required></div>
         <div class="controle-distribuicao-submit"><button class="btn btn-primary" type="submit">Distribuir fichas</button></div>
@@ -3302,22 +3313,31 @@ function renderControleFichaRow(item){
 async function submitControleDistribuicao(event){
   event.preventDefault();
   const form = event.currentTarget;
-  const rawNumbers = String(form.elements.numeros?.value || '');
-  const numbers = [...new Set(rawNumbers.split(/[,;\n]+/).map(value => normalizeControleFicha(value)).filter(Boolean))];
+  const modo = String(form.elements.modo?.value || 'numero');
+  const rawValues = String(form.elements.numeros?.value || '');
+  const values = [...new Set((modo === 'nome' ? rawValues.split(/\n+/) : rawValues.split(/[,;\n]+/)).map(value => String(value).trim()).filter(Boolean))];
   const destino = String(form.elements.destino?.value || '');
   const dataDistribuicao = String(form.elements.dataDistribuicao?.value || todayISO());
-  if(!numbers.length){ showToast('Informe pelo menos um número de ficha.'); return; }
+  if(!values.length){ showToast(`Informe pelo menos ${modo === 'nome' ? 'um nome' : 'um número de ficha'}.`); return; }
   if(!CONTROLE_FICHA_DESTINATIONS.includes(destino)){ showToast('Selecione um destino válido para a distribuição.'); return; }
   const targetStatus = destino === 'Epidemiologia' ? 'devolvida' : destino === 'Departamento VISAT' ? 'departamento_visat' : 'com_enfermeiro';
   const saved = [];
   const failed = [];
   const rejected = [];
-  for(const numero of numbers){
-    const current = findControleFichaByNumero(numero);
-    const linked = findLinkedRecord(numero);
+  for(const value of values){
+    const numero = modo === 'numero' ? normalizeControleFicha(value) : '';
+    const nome = modo === 'nome' ? normalizeDuplicateText(value) : '';
+    const linkedMatches = modo === 'nome' ? findLinkedRecordsByName(value) : [];
+    const controleMatches = modo === 'nome' ? findControleFichasByName(value) : [];
+    const current = modo === 'nome' ? (controleMatches.length === 1 ? controleMatches[0] : null) : findControleFichaByNumero(numero);
+    const linked = modo === 'nome' ? (linkedMatches.length === 1 ? linkedMatches[0] : null) : findLinkedRecord(numero);
     const isNew = !current;
+    if(modo === 'nome' && (linkedMatches.length > 1 || controleMatches.length > 1)){
+      rejected.push(`${value} (nome duplicado — informe o número)`);
+      continue;
+    }
     if(!current && !linked){
-      rejected.push(numero);
+      rejected.push(value);
       continue;
     }
     const now = new Date().toISOString();
@@ -3325,7 +3345,8 @@ async function submitControleDistribuicao(event){
       id:`cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`,
       controleFicha:true,
       anoReferencia:'2026',
-      numeroFicha:numero,
+      numeroFicha:modo === 'numero' ? numero : String(linked?.fichaNumero || ''),
+      patientName:modo === 'nome' ? String(value).trim() : String(linked?.patientName || ''),
       status:'departamento_visat',
       enfermeiroResponsavel:'',
       dataRecebimentoEpidemio:dataDistribuicao,
@@ -3357,8 +3378,8 @@ async function submitControleDistribuicao(event){
     if(await upsertControleFichaRemote(next)){
       if(isNew) controleFichas.push(next);
       else controleFichas = controleFichas.map(item => item.id === current.id ? next : item);
-      saved.push(numero);
-    } else failed.push(numero);
+      saved.push(modo === 'nome' ? (next.patientName || value) : numero);
+    } else failed.push(modo === 'nome' ? value : numero);
   }
   render();
   if(failed.length || rejected.length){
@@ -3375,10 +3396,11 @@ function controleFichaAgravoSigla(record){
   return record?.agravoType === 'mental' ? 'ATMRT' : record?.agravoType === 'biologico' ? 'ATMB' : record?.agravoType === 'lerdort' ? 'LER.DORT' : 'AT';
 }
 let epidemiologiaPdfPending = null;
-function showEpidemiologiaPdfOffer(numbers, dataDistribuicao){
-  const entries = numbers.map(numero=>{
-    const record = findLinkedRecord(numero);
-    return {sigla:controleFichaAgravoSigla(record), numero, nome:record?.patientName || 'Nome não informado'};
+function showEpidemiologiaPdfOffer(identifiers, dataDistribuicao){
+  const entries = identifiers.map(identifier=>{
+    const record = findLinkedRecord(identifier) || findLinkedRecordsByName(identifier)[0];
+    const controle = findControleFichaByNumero(identifier) || findControleFichasByName(identifier)[0];
+    return {sigla:controleFichaAgravoSigla(record), numero:record?.fichaNumero || controle?.numeroFicha || '', nome:record?.patientName || controle?.patientName || identifier || 'Nome não informado'};
   });
   const year = String(dataDistribuicao || todayISO()).slice(0,4);
   epidemiologiaPdfPending = {entries, year};
