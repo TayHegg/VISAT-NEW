@@ -2666,6 +2666,7 @@ let bmSelectedRegion = null;
 let pendingDeleteId = null;
 let dashboardCardFilter = '';
 let digitacaoDrawerOpen = false;
+let investigacaoDrawerOpen = false;
 let analyticsCardFilter = null;
 
 let controleFichas = [];
@@ -3329,13 +3330,31 @@ async function submitControleDistribuicao(event){
     const linkedMatches = modo === 'nome' ? findLinkedRecordsByName(value) : [];
     const controleMatches = modo === 'nome' ? findControleFichasByName(value) : [];
     const current = modo === 'nome' ? (controleMatches.length === 1 ? controleMatches[0] : null) : findControleFichaByNumero(numero);
-    const linked = modo === 'nome' ? (linkedMatches.length === 1 ? linkedMatches[0] : null) : findLinkedRecord(numero);
+    let linked = modo === 'nome' ? (linkedMatches.length === 1 ? linkedMatches[0] : null) : findLinkedRecord(numero);
     const isNew = !current;
     if(modo === 'nome' && (linkedMatches.length > 1 || controleMatches.length > 1)){
       rejected.push(`${value} (nome duplicado — informe o número)`);
       continue;
     }
     const now = new Date().toISOString();
+    if(!linked){
+      const createdRecord = {
+        id:uid(),
+        fichaNumero:modo === 'numero' ? numero : '',
+        patientName:modo === 'nome' ? String(value).trim() : '',
+        agravoType:'grave',
+        status:'aguardando_digitacao',
+        anoReferencia:OPERATIONAL_YEAR,
+        dataLancamento:dataDistribuicao,
+        createdAt:now,
+      };
+      if(!await upsertRecordRemote(createdRecord)){
+        failed.push(modo === 'nome' ? value : numero);
+        continue;
+      }
+      records.push(createdRecord);
+      linked = createdRecord;
+    }
     const next = isNew ? {
       id:`cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`,
       controleFicha:true,
@@ -4713,8 +4732,15 @@ function toggleDigitacaoDrawer(){
   digitacaoDrawerOpen = !digitacaoDrawerOpen;
   render();
 }
+function toggleInvestigacaoDrawer(){
+  investigacaoDrawerOpen = !investigacaoDrawerOpen;
+  render();
+}
 function digitacaoRecords(){
   return operationalRecords().filter(r=>r.status==='aguardando_digitacao' && r.pdfFicha);
+}
+function investigacaoRecords(){
+  return operationalRecords().filter(r=>r.status==='aguardando_investigacao');
 }
 function controleFichaLinkedOccurrence(item){
   const byNumber = findLinkedRecord(item?.numeroFicha);
@@ -4743,6 +4769,14 @@ function renderDigitacaoDrawer(){
   return `<div class="digitacao-drawer" role="dialog" aria-label="Fichas aguardando digitação">
     <div class="digitacao-drawer-header"><div><strong>Aguardando Digitação</strong><span>${list.length} ficha(s) com PDF anexado</span></div><button type="button" class="btn btn-ghost btn-sm" onclick="toggleDigitacaoDrawer()">Fechar</button></div>
     <div class="digitacao-drawer-body">${list.length ? `<div class="selection-list">${list.map(r=>`<div class="selection-item" onclick="goTo('form','${esc(r.id)}')"><div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span></div><div class="selection-item-meta"><span class="badge amber">PDF anexado</span><span>Completar digitação →</span></div></div>`).join('')}</div>` : '<div class="empty-mini">Nenhuma ficha aguardando digitação.</div>'}</div>
+  </div>`;
+}
+function renderInvestigacaoDrawer(){
+  if(!investigacaoDrawerOpen) return '';
+  const list = investigacaoRecords();
+  return `<div class="digitacao-drawer investigacao-drawer" role="dialog" aria-label="Fichas digitadas aguardando investigação">
+    <div class="digitacao-drawer-header"><div><strong>Digitadas — Aguardando investigação</strong><span>${list.length} ficha(s) ainda não finalizadas</span></div><button type="button" class="btn btn-ghost btn-sm" onclick="toggleInvestigacaoDrawer()">Fechar</button></div>
+    <div class="digitacao-drawer-body">${list.length ? `<div class="selection-list">${list.map(r=>`<div class="selection-item" onclick="goTo('form','${esc(r.id)}')"><div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span></div><div class="selection-item-meta"><span class="badge amber">Aguardando investigação</span><span>Continuar ficha →</span></div></div>`).join('')}</div>` : '<div class="empty-mini">Nenhuma ficha digitada aguardando investigação.</div>'}</div>
   </div>`;
 }
 function renderDashboardSelection(list, filter){
@@ -4774,6 +4808,7 @@ function renderDashboard(){
   const nAmber = withAlerts.filter(x=>x.level==='amber').length;
   const nGreen = withAlerts.filter(x=>x.level==='green').length;
   const nDigitacao = digitacaoRecords().length;
+  const nInvestigacao = investigacaoRecords().length;
   const nCatPend = sourceRecords.filter(r=>!isImportedRecord(r) && r.agravoType==='grave' && r.foiEmitidaCAT==='2').length;
 
   if(!sourceRecords.length){
@@ -4811,6 +4846,7 @@ function renderDashboard(){
       <div class="stat-card amber is-clickable ${dashboardCardFilter==='amber'?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas com pendência de atenção" onclick="setDashboardCardFilter('amber')"><div class="n">${nAmber}</div><div class="l">Com pendência de atenção</div></div>
       <div class="stat-card green is-clickable ${dashboardCardFilter==='green'?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas sem pendências" onclick="setDashboardCardFilter('green')"><div class="n">${nGreen}</div><div class="l">Sem pendências</div></div>
       <div class="stat-card digitacao-card is-clickable ${digitacaoDrawerOpen?'selected':''}" role="button" tabindex="0" title="Abrir fichas que possuem somente o PDF anexado" onclick="toggleDigitacaoDrawer()"><div class="n">${nDigitacao}</div><div class="l">Aguardando Digitação</div></div>
+      <div class="stat-card investigacao-card is-clickable ${investigacaoDrawerOpen?'selected':''}" role="button" tabindex="0" title="Abrir fichas digitadas que aguardam investigação" onclick="toggleInvestigacaoDrawer()"><div class="n">${nInvestigacao}</div><div class="l">Digitadas — Aguardando investigação</div></div>
     </div>
     ${renderDashboardSelection(dashboardSelection, dashboardCardFilter)}
     ${renderControleConferenciaBox()}
@@ -4823,6 +4859,7 @@ function renderDashboard(){
       ${renderMiniTable(sourceRecords.slice().sort((a,b)=> new Date(b.createdAt)-new Date(a.createdAt)).slice(0,6))}
     </div>
     ${renderDigitacaoDrawer()}
+    ${renderInvestigacaoDrawer()}
   `;
 }
 function renderMiniTable(list){
