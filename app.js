@@ -5020,6 +5020,10 @@ function renderConsulta(){
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
         Baixar backup Excel
       </button>
+      <input id="pdfBatchZipInput" type="file" accept=".zip,application/zip" style="display:none" onchange="importPdfBatchZip(this.files?.[0]); this.value='';">
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('pdfBatchZipInput').click()" title="Associar PDFs de um arquivo ZIP às fichas pelo número">
+        Importar PDFs em lote
+      </button>
     </div>
     ${all.length ? `<table>
       <thead><tr>
@@ -6358,7 +6362,65 @@ async function previewCurrentPdf(){
   refreshPdfPreviewPanel();
 }
 function sanitizeFileName(name){
-  return String(name || 'ficha.pdf').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(-100) || 'ficha.pdf';
+  return String(name || 'ficha.pdf').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(-100) || 'ficha.pdf';
+}
+function normalizeBatchText(value){
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+}
+function parseBatchPdfName(fileName){
+  const base = String(fileName || '').split('/').pop().replace(/\.pdf$/i,'').trim();
+  const match = base.match(/^(\d+)\s*(?:-|–|—|_)\s*(.*)$/);
+  if(!match) return null;
+  const fichaNumero = String(Number(match[1]));
+  const parts = match[2].split(/\s*(?:-|–|—)\s*/).filter(Boolean);
+  return {fichaNumero, patientHint:parts.slice(1).join(' - ') || parts[0] || base};
+}
+async function importPdfBatchZip(zipFile){
+  if(!zipFile) return;
+  if(typeof JSZip === 'undefined'){ showToast('Não foi possível carregar o leitor de ZIP. Atualize a página e tente novamente.'); return; }
+  if(!supabaseClient || !currentUser){ showToast('É necessário estar conectado ao SNAT para importar os PDFs.'); return; }
+  const currentRecords = recordsForYear(OPERATIONAL_YEAR).filter(r=>r && !r.controleFicha);
+  const byNumber = new Map(currentRecords.filter(r=>r.fichaNumero).map(r=>[String(Number(r.fichaNumero)),r]));
+  const report = {attached:[], skipped:[], invalid:[], errors:[]};
+  try{
+    showToast('Lendo o ZIP e preparando a importação dos PDFs...');
+    const zip = await JSZip.loadAsync(zipFile);
+    const entries = Object.values(zip.files).filter(entry=>!entry.dir && /\.pdf$/i.test(entry.name));
+    if(!entries.length){ showToast('O ZIP não contém arquivos PDF.'); return; }
+    for(const entry of entries){
+      const parsed = parseBatchPdfName(entry.name);
+      if(!parsed){ report.invalid.push(`${entry.name} — nome sem o padrão “número - agravo - paciente.pdf”`); continue; }
+      const record = byNumber.get(parsed.fichaNumero);
+      if(!record){ report.invalid.push(`${entry.name} — ficha ${parsed.fichaNumero} não encontrada entre as fichas de ${OPERATIONAL_YEAR}`); continue; }
+      if(record.pdfFicha){ report.skipped.push(`${entry.name} — ficha ${parsed.fichaNumero} já possui PDF`); continue; }
+      const expected = normalizeBatchText(record.patientName);
+      const supplied = normalizeBatchText(parsed.patientHint);
+      if(expected && supplied && !expected.includes(supplied) && !supplied.includes(expected)){
+        report.invalid.push(`${entry.name} — nome não confere com “${record.patientName}”`); continue;
+      }
+      try{
+        const blob = await entry.async('blob');
+        const file = new File([blob], entry.name.split('/').pop(), {type:'application/pdf'});
+        const attachment = await uploadPdfAttachment(record.id, file);
+        const updated = {...record, pdfFicha:attachment};
+        const ok = await upsertRecordRemote(updated);
+        if(!ok) throw new Error('registro não confirmado no banco');
+        const index = records.findIndex(r=>r.id===record.id);
+        if(index>=0) records[index] = updated;
+        report.attached.push(`${parsed.fichaNumero} — ${record.patientName}`);
+      }catch(error){ report.errors.push(`${entry.name} — ${error.message || 'falha ao anexar'}`); }
+    }
+    render();
+    const summary = `Importação concluída: ${report.attached.length} anexado(s), ${report.skipped.length} ignorado(s), ${report.invalid.length} pendência(s), ${report.errors.length} erro(s).`;
+    showToast(summary);
+    console.group('Importação de PDFs em lote'); console.log(summary, report); console.groupEnd();
+    if(report.invalid.length || report.errors.length){
+      alert(`${summary}\n\nArquivos que precisam de conferência:\n${[...report.invalid,...report.errors].slice(0,20).join('\n')}${report.invalid.length+report.errors.length>20?'\n...':''}`);
+    }
+  }catch(error){
+    console.error('Falha ao ler o ZIP de PDFs', error);
+    showToast(`Não foi possível processar o ZIP: ${error.message || 'arquivo inválido'}`);
+  }
 }
 function readFileAsDataUrl(file){
   return new Promise((resolve,reject)=>{
