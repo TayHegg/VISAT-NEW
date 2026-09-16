@@ -3208,6 +3208,11 @@ function controleFichaDistributionChip(item){
   const prefix = label === 'Departamento VISAT' ? 'Aguardando distribuição' : 'Distribuído para';
   return `<span class="controle-destino-chip">${prefix} ${esc(label)}</span>`;
 }
+function recordLocation(record){
+  if(record?.localizacao || record?.distribuidoPara) return String(record.localizacao || record.distribuidoPara);
+  const control = findControleFichaByNumero(record?.fichaNumero) || findControleFichasByName(record?.patientName)[0];
+  return controleFichaDistributionLabel(control) || 'Localização não informada';
+}
 function controleFichaLinkedSummary(item){
   const linked = findLinkedRecord(item.numeroFicha);
   if(!linked) return '<span class="controle-linked muted">Sem ficha correspondente cadastrada</span>';
@@ -3344,6 +3349,8 @@ async function submitControleDistribuicao(event){
         patientName:modo === 'nome' ? String(value).trim() : '',
         agravoType:'grave',
         status:'aguardando_digitacao',
+        localizacao:destino,
+        distribuidoPara:destino,
         anoReferencia:OPERATIONAL_YEAR,
         dataLancamento:dataDistribuicao,
         createdAt:now,
@@ -3354,6 +3361,12 @@ async function submitControleDistribuicao(event){
       }
       records.push(createdRecord);
       linked = createdRecord;
+    }
+    linked.localizacao = destino;
+    linked.distribuidoPara = destino;
+    if(!await upsertRecordRemote(linked)){
+      failed.push(modo === 'nome' ? value : numero);
+      continue;
     }
     const next = isNew ? {
       id:`cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`,
@@ -4744,6 +4757,8 @@ async function ensureControleOccurrenceRecords(){
       patientName:String(controleFichaPatientName(item) || item.patientName || item.nomePaciente || '').trim(),
       agravoType:'grave',
       status:'aguardando_digitacao',
+      localizacao:controleFichaDistributionLabel(item) || '',
+      distribuidoPara:controleFichaDistributionLabel(item) || '',
       anoReferencia:OPERATIONAL_YEAR,
       dataLancamento:String(item.dataDistribuicao || item.dataRecebimentoEpidemio || todayISO()),
       createdAt:new Date().toISOString(),
@@ -4778,7 +4793,7 @@ function renderDigitacaoDrawer(){
   const list=digitacaoRecords();
   return `<div class="digitacao-drawer" role="dialog" aria-label="Fichas aguardando digitação">
     <div class="digitacao-drawer-header"><div><strong>Aguardando Digitação</strong><span>${list.length} ficha(s) com PDF anexado</span></div><button type="button" class="btn btn-ghost btn-sm" onclick="toggleDigitacaoDrawer()">Fechar</button></div>
-    <div class="digitacao-drawer-body">${list.length ? `<div class="selection-list">${list.map(r=>`<div class="selection-item" onclick="goTo('form','${esc(r.id)}')"><div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span></div><div class="selection-item-meta"><span class="badge amber">PDF anexado</span><span>Completar digitação →</span></div></div>`).join('')}</div>` : '<div class="empty-mini">Nenhuma ficha aguardando digitação.</div>'}</div>
+    <div class="digitacao-drawer-body">${list.length ? `<div class="selection-list">${list.map(r=>`<div class="selection-item" onclick="goTo('form','${esc(r.id)}')"><div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span><span class="selection-agravo">Local: ${esc(recordLocation(r))}</span></div><div class="selection-item-meta"><span class="badge amber">PDF anexado</span><span>Completar digitação →</span></div></div>`).join('')}</div>` : '<div class="empty-mini">Nenhuma ficha aguardando digitação.</div>'}</div>
   </div>`;
 }
 function renderDashboardSelection(list, filter){
@@ -4796,7 +4811,7 @@ function renderFichaSelectionList(list){
     const level = worstLevel(computeAlerts(r));
     const alerts = computeAlerts(r).filter(a=>a.level!=='green');
     return `<div class="selection-item" onclick="goTo('form','${r.id}')">
-      <div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span></div>
+      <div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span><span class="selection-agravo">Local: ${esc(recordLocation(r))}</span></div>
       <div class="selection-item-meta"><span class="badge ${level}"><span class="dot ${level}"></span>${level==='red'?'Crítico':level==='amber'?'Atenção':'OK'}</span><span>${fmtDate(r.dataNotificacao)}</span>${alerts.length?`<span>${alerts.length} alerta(s)</span>`:''}</div>
     </div>`;
   }).join('')}</div>`;
@@ -4867,7 +4882,7 @@ function renderMiniTable(list){
     ${list.map(r=>{
       const level = worstLevel(computeAlerts(r));
       return `<tr>
-        <td>${esc(r.patientName||'—')}</td>
+        <td><b>${esc(r.patientName||'—')}</b><div class="hint">${esc(recordLocation(r))}</div></td>
         <td>${esc(AGRAVOS[r.agravoType]?.label||'—')}</td>
         <td>${fmtDate(r.dataNotificacao)}</td>
         <td><span class="badge ${level}"><span class="dot ${level}"></span>${level==='red'?'Crítico':level==='amber'?'Atenção':'OK'}</span></td>
@@ -5064,7 +5079,7 @@ function renderConsulta(){
     ${all.length ? `<table>
       <thead><tr>
         <th data-sort="fichaNumero">Nº da Ficha${sortIcon('fichaNumero')}</th>
-        <th data-sort="patientName">Nome${sortIcon('patientName')}</th>
+        <th data-sort="patientName">Nome / localização${sortIcon('patientName')}</th>
         <th data-sort="agravoType">Agravo${sortIcon('agravoType')}</th>
         <th data-sort="dataNotificacao">Data Notif.${sortIcon('dataNotificacao')}</th>
         <th data-sort="municipioNotificacao">Município${sortIcon('municipioNotificacao')}</th>
@@ -5079,7 +5094,7 @@ function renderConsulta(){
           const statusLabel = (STATUS_OPTIONS.find(s=>s[0]===r.status)||[,'—'])[1];
           return `<tr>
             <td style="font-family:var(--font-mono);color:var(--text-muted)">${esc(fichaLabel(r))}</td>
-            <td><b>${esc(r.patientName||'—')}</b></td>
+            <td><b>${esc(r.patientName||'—')}</b><div class="hint">Local: ${esc(recordLocation(r))}</div></td>
             <td>${esc(AGRAVOS[r.agravoType]?.label||'—')}</td>
             <td>${fmtDate(r.dataNotificacao)}</td>
             <td>${esc(r.municipioNotificacao||'—')}</td>
@@ -7233,7 +7248,7 @@ function renderPrint(id){
     <table>${rows([
       ['Unidade de Saúde', r.unidadeSaude],['Data da Notificação', fmtDate(r.dataNotificacao)],
       ['Data do Acidente', fmtDate(r.dataAcidente)],
-      ['Nome do Paciente', r.patientName],['Data de Nascimento', fmtDate(r.dataNascimento)+ (age!=null?` (${age} anos — ${faixaEtaria(age)})`:'')],
+      ['Nome do Paciente', r.patientName],['Localização da ficha', recordLocation(r)],['Data de Nascimento', fmtDate(r.dataNascimento)+ (age!=null?` (${age} anos — ${faixaEtaria(age)})`:'')],
       ['Sexo', r.sexo],['Município/UF de Notificação', (r.municipioNotificacao||'')+' / '+(r.ufNotificacao||'')],
       ['Ocupação', r.ocupacao],['Nº do SINAN', r.numeroSinan],['CBO', r.cbo],['Classe CNAE', r.cnae],['Empresa', r.nomeEmpresa],['CNPJ/CPF', r.cnpjCpf],
     ])}</table>
