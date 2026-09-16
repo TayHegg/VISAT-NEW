@@ -2743,6 +2743,7 @@ async function loadRecords(){
     const latestProductionMonth = producaoLatestMonth(producaoMensal);
     if(latestProductionMonth && !producaoMensal.some(item=>producaoMonth(item.data) === producaoMonth(producaoMesFiltro))) producaoMesFiltro = latestProductionMonth;
     records = loaded.filter(row => !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
+    await ensureControleOccurrenceRecords();
   }catch(e){
     console.error('Falha ao carregar registros do Supabase', e);
     records = [];
@@ -4741,6 +4742,23 @@ function digitacaoRecords(){
 }
 function investigacaoRecords(){
   return operationalRecords().filter(r=>r.status==='aguardando_investigacao');
+}
+async function ensureControleOccurrenceRecords(){
+  const missing = operationalControleFichas().filter(item=>!controleFichaLinkedOccurrence(item));
+  for(const item of missing){
+    const record = {
+      id:uid(),
+      fichaNumero:String(item.numeroFicha || ''),
+      patientName:String(controleFichaPatientName(item) || item.patientName || item.nomePaciente || '').trim(),
+      agravoType:'grave',
+      status:'aguardando_digitacao',
+      anoReferencia:OPERATIONAL_YEAR,
+      dataLancamento:String(item.dataDistribuicao || item.dataRecebimentoEpidemio || todayISO()),
+      createdAt:new Date().toISOString(),
+    };
+    if(!record.fichaNumero && !record.patientName) continue;
+    if(await upsertRecordRemote(record)) records.push(record);
+  }
 }
 function controleFichaLinkedOccurrence(item){
   const byNumber = findLinkedRecord(item?.numeroFicha);
