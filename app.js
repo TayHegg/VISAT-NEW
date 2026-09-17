@@ -2731,7 +2731,7 @@ async function loadRecords(){
       for(let attempt=1; attempt<=3; attempt++){
         try{
           result = await supabaseClient
-            .from('records')
+            .from('records_light')
             .select('data')
             .order('updated_at', { ascending: true })
             .range(offset, offset + pageSize - 1);
@@ -6534,7 +6534,24 @@ async function getPdfBrowserUrl(attachment){
   return {url:await getPdfAttachmentUrl(attachment), revoke:false};
 }
 async function openPdfForRecord(id){
-  const record = records.find(r=>r.id===id);
+  let record = records.find(r=>r.id===id);
+  // Os PDFs não são carregados no início. Busque o conteúdo completo somente
+  // quando o usuário solicitar a abertura do arquivo.
+  if(record?.pdfFicha && !record.pdfFicha.dataUrl && !record.pdfFicha.path){
+    try{
+      const {data, error} = await supabaseClient.from('records').select('data').eq('id', id).limit(1).maybeSingle();
+      if(error) throw error;
+      if(data?.data){
+        record = {...record, ...data.data};
+        const index = records.findIndex(item=>item.id===id);
+        if(index >= 0) records[index] = record;
+      }
+    }catch(error){
+      console.error('Falha ao carregar o PDF sob demanda', error);
+      showToast('Não foi possível carregar o PDF agora.');
+      return;
+    }
+  }
   if(!record?.pdfFicha){ showToast('Esta ficha não possui PDF anexado.'); return; }
   const tab = window.open('about:blank', '_blank');
   if(!tab){ showToast('O navegador bloqueou a nova aba. Permita pop-ups para abrir o PDF.'); return; }
