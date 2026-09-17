@@ -2625,7 +2625,9 @@ const INVESTIGADOR_FUNCAO_FIXA = 'Enfermeiro';
 const INVESTIGADOR_OPTIONS = [['Julio Cesar','Julio Cesar'],['Luciane Manhães','Luciane Manhães']];
 const PDF_BUCKET = 'visat-fichas-pdf';
 const PDF_MAX_BYTES = 8 * 1024 * 1024;
-let batchImportState = {items:[], processing:false};
+const BATCH_PDF_CHUNK_SIZE = 15;
+const BATCH_PDF_PAUSE_MS = 300;
+let batchImportState = {items:[], processing:false, progress:0};
 
 // Mapeamento das partes do corpo oficiais do SINAN para as regiões consolidadas do mapa corporal
 const BODY_REGIONS = [
@@ -4987,6 +4989,13 @@ function batchItemStatus(item){
   if(!duplicateNamesMatch(item.patientName, item.record.patientName) && batchNormalize(item.patientName)!==batchNormalize(item.record.patientName)) return 'warn';
   return 'ok';
 }
+function updateBatchImportProgress(done,total){
+  batchImportState.progress = done;
+  const status = document.getElementById('batchImportProgress');
+  if(status) status.textContent = `Processando ${done} de ${total} ficha(s)…`;
+  const button = document.querySelector('#batchImportModal .btn-primary');
+  if(button) button.textContent = `Processando ${done} de ${total}…`;
+}
 function renderBatchImportModal(){
   const items = batchImportState.items;
   const ready = items.filter(x=>x.status==='ok' || x.status==='new').length;
@@ -5002,11 +5011,12 @@ function renderBatchImportModal(){
     <p class="batch-import-help">Aceita <b>20 - AT - NOME.pdf</b> ou, para fichas sem número, <b>AT - NOME.pdf</b>. Nesse caso, cria o registro apenas com agravo, nome e PDF. PDFs existentes nunca são substituídos automaticamente.</p>
     <input id="batchZipInput" type="file" accept=".zip,application/zip" onchange="analyzeBatchZip(this)">
     ${items.length ? `<div class="batch-import-summary"><span class="ok">${ready} prontos</span><span class="ok">${created} fichas novas</span><span class="warn">${warn} para conferir</span><span class="bad">${bad} sem correspondência</span></div><div class="batch-import-list">${rows}</div>` : ''}
+    ${batchImportState.processing ? `<div id="batchImportProgress" class="batch-import-progress" role="status" aria-live="polite">Processando ${batchImportState.progress || 0} de ${ready} ficha(s)…</div>` : ''}
     <div class="row"><button type="button" class="btn btn-ghost" onclick="closeBatchImport()">Cancelar</button>${items.length ? `<button type="button" class="btn btn-primary" onclick="processBatchImport()" ${batchImportState.processing||!ready?'disabled':''}>${batchImportState.processing?'Importando...':`Anexar e criar selecionados (${ready})`}</button>` : ''}</div>
   </div></div>`;
 }
-function openBatchImport(){ batchImportState={items:[],processing:false}; document.body.insertAdjacentHTML('beforeend',renderBatchImportModal()); }
-function closeBatchImport(){ document.getElementById('batchImportModal')?.remove(); batchImportState={items:[],processing:false}; }
+function openBatchImport(){ batchImportState={items:[],processing:false,progress:0}; document.body.insertAdjacentHTML('beforeend',renderBatchImportModal()); }
+function closeBatchImport(){ document.getElementById('batchImportModal')?.remove(); batchImportState={items:[],processing:false,progress:0}; }
 async function analyzeBatchZip(input){
   const zipFile=input?.files?.[0];
   if(!zipFile) return;
@@ -5042,9 +5052,14 @@ async function processBatchImport(){
   const selectedItems=[...document.querySelectorAll('#batchImportModal input[data-batch-index]:checked')].map(input=>batchImportState.items[Number(input.dataset.batchIndex)]).filter(item=>item && (item.status==='ok' || item.status==='new'));
   if(!selectedItems.length) return;
   batchImportState.processing=true;
+  batchImportState.progress=0;
   const button=document.querySelector('#batchImportModal .btn-primary'); if(button){button.disabled=true;button.textContent='Importando...';}
   let success=0; const created=[]; const attached=[]; const errors=[];
-  for(const item of selectedItems){
+  const total = selectedItems.length;
+  const pauseBetweenChunks = () => new Promise(resolve=>setTimeout(resolve, BATCH_PDF_PAUSE_MS));
+  updateBatchImportProgress(0,total);
+  for(let itemIndex=0; itemIndex<total; itemIndex++){
+    const item = selectedItems[itemIndex];
     try{
       const baseRecord=item.record || {id:uid(), ...(item.number ? {fichaNumero:item.number} : {}), patientName:item.patientName, agravoType:item.agravoType || 'grave', status:'aguardando_digitacao', anoReferencia:OPERATIONAL_YEAR, createdAt:new Date().toISOString()};
       const attachment=await uploadPdfAttachment(baseRecord.id,item.file);
@@ -5057,6 +5072,12 @@ async function processBatchImport(){
       success++; attached.push(`Ficha ${reportNumber} — ${reportName}`);
       if(!item.record) created.push(`Ficha ${reportNumber} — ${reportName}`);
     }catch(error){ errors.push(`${item.displayName}: ${error.message||'erro desconhecido'}`); }
+    finally{
+      updateBatchImportProgress(itemIndex + 1,total);
+      // Cada ficha faz upload + upsert. Ceda o event loop e faça uma pausa
+      // curta após cada bloco para evitar saturar Storage/PostgREST.
+      if((itemIndex + 1) % BATCH_PDF_CHUNK_SIZE === 0 && itemIndex + 1 < total) await pauseBetweenChunks();
+    }
   }
   batchImportState.processing=false;
   closeBatchImport(); render();
