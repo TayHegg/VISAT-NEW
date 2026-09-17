@@ -2721,20 +2721,34 @@ try{
   console.error('Falha ao inicializar cliente Supabase (biblioteca não carregou):', e);
 }
 
+const RECORDS_PAGE_SIZE = 50;
+
+function applyRecordsCursor(query, cursor){
+  if(!cursor?.updatedAt) return query;
+  // updated_at é o cursor principal; id desempata registros gravados no mesmo instante.
+  // Os IDs gerados pelo sistema são strings simples, portanto podem ser usados no
+  // filtro OR do PostgREST sem alterar nem copiar os dados da tabela.
+  if(!cursor.id) return query.gt('updated_at', cursor.updatedAt);
+  return query.or(`updated_at.gt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.gt.${cursor.id})`);
+}
+
 async function loadRecords(){
   try{
-    const pageSize = 1000;
     const allRows = [];
-    for(let offset = 0;; offset += pageSize){
+    let cursor = null;
+    for(;;){
       let result = null;
       let lastError = null;
       for(let attempt=1; attempt<=3; attempt++){
         try{
-          result = await supabaseClient
+          let query = supabaseClient
             .from('records_light')
-            .select('data')
+            .select('id,data,updated_at')
             .order('updated_at', { ascending: true })
-            .range(offset, offset + pageSize - 1);
+            .order('id', { ascending: true })
+            .limit(RECORDS_PAGE_SIZE);
+          query = applyRecordsCursor(query, cursor);
+          result = await query;
           if(!result.error) break;
           lastError = result.error;
         }catch(error){ lastError = error; }
@@ -2744,7 +2758,15 @@ async function loadRecords(){
       const { data } = result;
       const page = data || [];
       allRows.push(...page);
-      if(page.length < pageSize) break;
+      if(page.length < RECORDS_PAGE_SIZE) break;
+
+      const lastRow = page[page.length - 1];
+      const nextCursor = { updatedAt: lastRow?.updated_at, id: lastRow?.id };
+      if(!nextCursor.updatedAt) throw new Error('A consulta dos registros retornou uma linha sem updated_at.');
+      if(cursor && nextCursor.updatedAt === cursor.updatedAt && nextCursor.id === cursor.id){
+        throw new Error('A paginação dos registros não avançou para o próximo cursor.');
+      }
+      cursor = nextCursor;
     }
     const loaded = allRows.map(row => row.data).filter(Boolean);
     controleFichas = dedupeControleFichas(loaded.filter(isControleFichaRecord).filter(isOperationalControleFicha).map(normalizeControleFichaRecord));
