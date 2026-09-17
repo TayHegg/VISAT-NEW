@@ -2726,12 +2726,22 @@ async function loadRecords(){
     const pageSize = 1000;
     const allRows = [];
     for(let offset = 0;; offset += pageSize){
-      const { data, error } = await supabaseClient
-        .from('records')
-        .select('data')
-        .order('updated_at', { ascending: true })
-        .range(offset, offset + pageSize - 1);
-      if(error) throw error;
+      let result = null;
+      let lastError = null;
+      for(let attempt=1; attempt<=3; attempt++){
+        try{
+          result = await supabaseClient
+            .from('records')
+            .select('data')
+            .order('updated_at', { ascending: true })
+            .range(offset, offset + pageSize - 1);
+          if(!result.error) break;
+          lastError = result.error;
+        }catch(error){ lastError = error; }
+        await new Promise(resolve=>setTimeout(resolve, 400 * attempt));
+      }
+      if(!result || result.error) throw lastError || new Error('A consulta dos registros não retornou dados.');
+      const { data } = result;
       const page = data || [];
       allRows.push(...page);
       if(page.length < pageSize) break;
@@ -2742,19 +2752,16 @@ async function loadRecords(){
     const latestProductionMonth = producaoLatestMonth(producaoMensal);
     if(latestProductionMonth && !producaoMensal.some(item=>producaoMonth(item.data) === producaoMonth(producaoMesFiltro))) producaoMesFiltro = latestProductionMonth;
     records = loaded.filter(row => !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
-    // A recuperação automática é complementar: se uma ficha do Controle não puder
-    // ser criada agora, isso não pode impedir o Painel de exibir os dados já carregados.
-    try{
-      await ensureControleOccurrenceRecords();
-    }catch(error){
-      console.warn('A recuperação automática do Controle de Fichas falhou; os dados carregados serão mantidos.', error);
-    }
+    // A recuperação automática é complementar e não bloqueia a primeira renderização.
+    Promise.resolve().then(()=>ensureControleOccurrenceRecords()).then(()=>render()).catch(error=>{
+      console.warn('A recuperação automática do Controle de Fichas falhou; os dados carregados foram mantidos.', error);
+    });
   }catch(e){
     console.error('Falha ao carregar registros do Supabase', e);
-    records = [];
-    controleFichas = [];
-    producaoMensal = [];
-    showToast('Não foi possível conectar ao banco de dados.');
+    // Nunca apague os dados que já estão em memória por causa de uma falha transitória.
+    if(!records.length && !controleFichas.length && !producaoMensal.length){
+      showToast('Não foi possível carregar os registros agora. Tentando novamente…');
+    }
   }
 }
 
