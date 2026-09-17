@@ -4930,8 +4930,8 @@ function parseBatchPdfName(name){
   const base = String(name || '').split('/').pop();
   if(!/\.pdf$/i.test(base)) return null;
   // Aceita "20 - AT - NOME.pdf" e também fichas sem número: "AT - NOME.pdf".
-  const numberedMatch = base.match(/^\s*(\d+)\s*-\s*([^-]+?)\s*-\s*(.+?)\s*\.pdf\s*$/i);
-  const unnumberedMatch = base.match(/^\s*([^-]+?)\s*-\s*(.+?)\s*\.pdf\s*$/i);
+  const numberedMatch = base.match(/^\s*(\d+)\s*(?:-|–|—|_)\s*([^-–—_]+?)\s*(?:-|–|—|_)\s*(.+?)\s*\.pdf\s*$/i);
+  const unnumberedMatch = base.match(/^\s*([^-–—_]+?)\s*(?:-|–|—|_)\s*(.+?)\s*\.pdf\s*$/i);
   const match = numberedMatch || unnumberedMatch;
   if(!match) return {number:'', patientName:'', displayName:base};
   const number = numberedMatch ? String(Number(numberedMatch[1])) : '';
@@ -4983,7 +4983,11 @@ async function analyzeBatchZip(input){
       const pdf=new File([file], parsed.displayName, {type:'application/pdf'});
       // O mesmo número de ficha pode existir em anos diferentes. O lote atual é de 2026,
       // portanto a correspondência deve considerar exclusivamente as fichas operacionais do ano.
-      const record=operationalRecords().find(r=>batchFichaKey(r.fichaNumero)===batchFichaKey(parsed.number));
+      // Nunca associe um PDF sem número ao primeiro registro que também esteja sem número.
+      // PDFs sem número devem criar um novo registro com o nome extraído do arquivo.
+      const record=parsed.number ? operationalRecords()
+        .filter(r=>batchFichaKey(r.fichaNumero)===batchFichaKey(parsed.number))
+        .sort((a,b)=>Number(Boolean(b.patientName))-Number(Boolean(a.patientName)))[0] || null : null;
       const item={...parsed,file,record,status:'bad'};
       item.status=batchItemStatus(item);
       items.push(item);
@@ -5070,10 +5074,6 @@ function renderConsulta(){
       <button class="btn btn-ghost btn-sm" onclick="exportExcel()" title="Baixar backup completo em Excel com todas as fichas e abas do modelo">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
         Baixar backup Excel
-      </button>
-      <input id="pdfBatchZipInput" type="file" accept=".zip,application/zip" style="display:none" onchange="importPdfBatchZip(this.files?.[0]); this.value='';">
-      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('pdfBatchZipInput').click()" title="Associar PDFs de um arquivo ZIP às fichas pelo número">
-        Importar PDFs em lote
       </button>
     </div>
     ${all.length ? `<table>
@@ -6418,7 +6418,7 @@ function sanitizeFileName(name){
 function normalizeBatchText(value){
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
 }
-function parseBatchPdfName(fileName){
+function parseLegacyPdfBatchName(fileName){
   const base = String(fileName || '').split('/').pop().replace(/\.pdf$/i,'').trim();
   const match = base.match(/^(\d+)\s*(?:-|–|—|_)\s*(.*)$/);
   if(!match) return null;
@@ -6439,7 +6439,7 @@ async function importPdfBatchZip(zipFile){
     const entries = Object.values(zip.files).filter(entry=>!entry.dir && /\.pdf$/i.test(entry.name));
     if(!entries.length){ showToast('O ZIP não contém arquivos PDF.'); return; }
     for(const entry of entries){
-      const parsed = parseBatchPdfName(entry.name);
+      const parsed = parseLegacyPdfBatchName(entry.name);
       if(!parsed){ report.invalid.push(`${entry.name} — nome sem o padrão “número - agravo - paciente.pdf”`); continue; }
       const record = byNumber.get(parsed.fichaNumero);
       if(!record){ report.invalid.push(`${entry.name} — ficha ${parsed.fichaNumero} não encontrada entre as fichas de ${OPERATIONAL_YEAR}`); continue; }
