@@ -2742,7 +2742,13 @@ async function loadRecords(){
     const latestProductionMonth = producaoLatestMonth(producaoMensal);
     if(latestProductionMonth && !producaoMensal.some(item=>producaoMonth(item.data) === producaoMonth(producaoMesFiltro))) producaoMesFiltro = latestProductionMonth;
     records = loaded.filter(row => !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
-    await ensureControleOccurrenceRecords();
+    // A recuperação automática é complementar: se uma ficha do Controle não puder
+    // ser criada agora, isso não pode impedir o Painel de exibir os dados já carregados.
+    try{
+      await ensureControleOccurrenceRecords();
+    }catch(error){
+      console.warn('A recuperação automática do Controle de Fichas falhou; os dados carregados serão mantidos.', error);
+    }
   }catch(e){
     console.error('Falha ao carregar registros do Supabase', e);
     records = [];
