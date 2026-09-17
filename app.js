@@ -4940,16 +4940,21 @@ function batchFichaKey(value){
   return /^\d+$/.test(text) ? String(Number(text)) : batchNormalize(text);
 }
 function parseBatchPdfName(name){
-  const base = String(name || '').split('/').pop();
+  const base = String(name || '').split('/').pop().replace(/[\u00a0\u2007\u202f]/g,' ').trim();
   if(!/\.pdf$/i.test(base)) return null;
-  // Aceita "20 - AT - NOME.pdf" e também fichas sem número: "AT - NOME.pdf".
-  const numberedMatch = base.match(/^\s*(\d+)\s*(?:-|–|—|_)\s*([^-–—_]+?)\s*(?:-|–|—|_)\s*(.+?)\s*\.pdf\s*$/i);
-  const unnumberedMatch = base.match(/^\s*([^-–—_]+?)\s*(?:-|–|—|_)\s*(.+?)\s*\.pdf\s*$/i);
-  const match = numberedMatch || unnumberedMatch;
-  if(!match) return {number:'', patientName:'', displayName:base};
+  // Aceita "20 - AT - NOME.pdf", "Ficha 20 - AT - NOME.pdf" e também
+  // fichas sem número: "AT - NOME.pdf". O número é reconhecido antes
+  // de qualquer validação do agravo, para não transformar uma ficha numerada
+  // em ficha sem número quando o nome do agravo for diferente.
+  const stem = base.replace(/\.pdf\s*$/i,'').trim();
+  const numberedMatch = stem.match(/^(?:ficha\s*|n[ºo°]?\s*)?[\[\(]?\s*(\d+)\s*[\]\)]?\s*(?:-|–|—|_)\s*(.+)$/i);
+  const remainder = numberedMatch ? numberedMatch[2] : stem;
+  const parts = remainder.split(/\s*(?:-|–|—|_)\s*/).map(part=>part.trim()).filter(Boolean);
+  if(!parts.length) return {number:'', patientName:'', displayName:base};
   const number = numberedMatch ? String(Number(numberedMatch[1])) : '';
-  const typeToken = (numberedMatch ? numberedMatch[2] : unnumberedMatch[1]).trim().toUpperCase();
-  const patientName = (numberedMatch ? numberedMatch[3] : unnumberedMatch[2]).trim();
+  const typeToken = numberedMatch && parts.length > 1 ? parts[0].toUpperCase() : (parts[0] || '').toUpperCase();
+  const patientName = (numberedMatch && parts.length > 1 ? parts.slice(1).join(' - ') : parts.slice(1).join(' - ')).trim();
+  if(!patientName) return {number:'', patientName:'', displayName:base};
   const normalizedTypeToken = typeToken.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.\s/_-]/g, '');
   const agravoType = normalizedTypeToken === 'ATMRT' ? 'mental' : normalizedTypeToken === 'ATMB' ? 'biologico' : normalizedTypeToken === 'LERDORT' ? 'lerdort' : 'grave';
   return {number, patientName, agravoType, displayName:base};
