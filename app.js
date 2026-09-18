@@ -2728,7 +2728,7 @@ try{
   console.error('Falha ao inicializar cliente Supabase (biblioteca não carregou):', e);
 }
 
-const RECORDS_PAGE_SIZE = 1000;
+const RECORDS_PAGE_SIZE = 500;
 
 function applyRecordsCursor(query, cursor){
   if(!cursor?.updatedAt) return query;
