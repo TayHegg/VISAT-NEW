@@ -6543,15 +6543,16 @@ async function previewCurrentPdf(){
     name = pdfAttachmentState.file.name || 'ficha.pdf';
   }else if(pdfAttachmentState.attachment){
     try{
-      const browserFile = await getPdfBrowserUrl(pdfAttachmentState.attachment);
+      const attachment = await loadFullPdfAttachment(formData.id, pdfAttachmentState.attachment);
+      const browserFile = await getPdfBrowserUrl(attachment);
       url = browserFile.url;
       revoke = browserFile.revoke;
+      kind = attachment.contentType || 'application/pdf';
+      name = attachment.name || 'ficha.pdf';
     }catch(error){
       showToast(error.message || 'Não foi possível preparar o PDF para visualização.');
       return;
     }
-    kind = pdfAttachmentState.attachment.contentType || 'application/pdf';
-    name = pdfAttachmentState.attachment.name || 'ficha.pdf';
   }else{
     showToast('Faça o upload de um PDF antes de visualizar a ficha.');
     return;
@@ -6674,6 +6675,29 @@ async function getPdfBrowserUrl(attachment){
     return {url:URL.createObjectURL(blob), revoke:true};
   }
   return {url:await getPdfAttachmentUrl(attachment), revoke:false};
+}
+function hasPdfSource(attachment){
+  return Boolean(attachment?.dataUrl || attachment?.path || attachment?.url);
+}
+async function loadFullPdfAttachment(recordId, attachment){
+  if(hasPdfSource(attachment)) return attachment;
+  if(!recordId) return attachment;
+  showPdfLoading();
+  try{
+    const result = await fetchPdfRecord(recordId);
+    if(result.error) throw result.error;
+    const fullRecord = result.data?.data;
+    const fullAttachment = fullRecord?.pdfFicha;
+    if(!fullAttachment || !hasPdfSource(fullAttachment)){
+      throw new Error('O registro não contém o conteúdo do PDF anexado.');
+    }
+    cachePdfRecord(recordId, fullRecord);
+    formData = {...formData, ...fullRecord};
+    pdfAttachmentState.attachment = fullAttachment;
+    return fullAttachment;
+  }finally{
+    hidePdfLoading();
+  }
 }
 function showPdfLoading(){
   if(document.getElementById('pdfLoadingModal')) return;
