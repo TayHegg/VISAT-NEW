@@ -2756,7 +2756,7 @@ async function loadRecords(year=OPERATIONAL_YEAR, initial=false){
       for(let attempt=1; attempt<=3; attempt++){
         try{
           let query = supabaseClient
-            .from('records_light')
+            .from('records_light_cache')
             .select('id,data,updated_at')
             .order('updated_at', { ascending: true })
             .order('id', { ascending: true })
