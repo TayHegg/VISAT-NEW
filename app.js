@@ -4327,7 +4327,7 @@ function yearFromRecord(r){
 function recordsForYear(year){
   return year ? records.filter(r=>yearFromRecord(r)===String(year)) : records;
 }
-const OPERATIONAL_YEAR = '2026';
+const OPERATIONAL_YEAR = String(new Date().getFullYear());
 function operationalRecords(){
   return recordsForYear(OPERATIONAL_YEAR);
 }
