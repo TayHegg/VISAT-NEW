@@ -2719,13 +2719,16 @@ const SUPABASE_KEY = 'sb_publishable_OqhyfChr2RxPl3xfxAPyuQ_sge3PV7j';
 let supabaseClient = null;
 const pdfRecordCache = new Map();
 const PDF_FETCH_TIMEOUT_MS = 15000;
+const loadedRecordYears = new Set();
+const loadingRecordYears = new Map();
+const historicalRecordsCache = new Map();
 try{
   supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 }catch(e){
   console.error('Falha ao inicializar cliente Supabase (biblioteca não carregou):', e);
 }
 
-const RECORDS_PAGE_SIZE = 20;
+const RECORDS_PAGE_SIZE = 1000;
 
 function applyRecordsCursor(query, cursor){
   if(!cursor?.updatedAt) return query;
@@ -2736,17 +2739,18 @@ function applyRecordsCursor(query, cursor){
   return query.or(`updated_at.gt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.gt.${cursor.id})`);
 }
 
-async function loadRecords(){
-  const loadStartedAt = performance.now();
-  console.time('[SNAT] carregamento inicial records_light');
-  console.info('[SNAT] início do carregamento inicial', new Date().toISOString());
+async function loadRecords(year=OPERATIONAL_YEAR, initial=false){
+  if(!initial && historicalRecordsCache.has(String(year))){
+    const cached=historicalRecordsCache.get(String(year));
+    const knownIds=new Set(records.map(row=>row.id));
+    records.push(...cached.filter(row=>!knownIds.has(row.id)));
+    loadedRecordYears.add(String(year));
+    return;
+  }
   try{
     const allRows = [];
     let cursor = null;
-    let pageNumber = 0;
     for(;;){
-      pageNumber++;
-      const pageStartedAt = performance.now();
       let result = null;
       let lastError = null;
       for(let attempt=1; attempt<=3; attempt++){
@@ -2768,7 +2772,6 @@ async function loadRecords(){
       const { data } = result;
       const page = data || [];
       allRows.push(...page);
-      console.info('[SNAT] página records_light concluída', {pagina:pageNumber, quantidade:page.length, ms:Math.round(performance.now()-pageStartedAt)});
       if(page.length < RECORDS_PAGE_SIZE) break;
 
       const lastRow = page[page.length - 1];
@@ -2780,19 +2783,30 @@ async function loadRecords(){
       cursor = nextCursor;
     }
     const loaded = allRows.map(row => row.data).filter(Boolean);
-    controleFichas = dedupeControleFichas(loaded.filter(isControleFichaRecord).filter(isOperationalControleFicha).map(normalizeControleFichaRecord));
-    producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
-    const latestProductionMonth = producaoLatestMonth(producaoMensal);
-    if(latestProductionMonth && !producaoMensal.some(item=>producaoMonth(item.data) === producaoMonth(producaoMesFiltro))) producaoMesFiltro = latestProductionMonth;
-    records = loaded.filter(row => !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
-    // A recuperação automática é complementar e não bloqueia a primeira renderização.
-    Promise.resolve().then(()=>ensureControleOccurrenceRecords()).then(()=>render()).catch(error=>{
-      console.warn('A recuperação automática do Controle de Fichas falhou; os dados carregados foram mantidos.', error);
-    });
-    console.info('[SNAT] records_light processado', {linhas:loaded.length, paginas:pageNumber, ms:Math.round(performance.now()-loadStartedAt)});
-    console.timeEnd('[SNAT] carregamento inicial records_light');
+    if(initial){
+      controleFichas = dedupeControleFichas(loaded.filter(isControleFichaRecord).filter(isOperationalControleFicha).map(normalizeControleFichaRecord));
+      producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
+      const latestProductionMonth = producaoLatestMonth(producaoMensal);
+      if(latestProductionMonth && !producaoMensal.some(item=>producaoMonth(item.data) === producaoMonth(producaoMesFiltro))) producaoMesFiltro = latestProductionMonth;
+    }
+    const yearLoaded = loaded.filter(row=>yearFromRecord(row)===String(year));
+    const loadedRecords = yearLoaded.filter(row => !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
+    if(initial){
+      [OPERATIONAL_YEAR,'2024','2025'].forEach(target=>historicalRecordsCache.set(target,loaded.filter(row=>yearFromRecord(row)===target && !isControleFichaRecord(row) && !isProducaoMensalRecord(row))));
+    }
+    if(initial) records = loadedRecords;
+    else {
+      const knownIds = new Set(records.map(row=>row.id));
+      records.push(...loadedRecords.filter(row=>!knownIds.has(row.id)));
+    }
+    loadedRecordYears.add(String(year));
+    if(initial){
+      // A recuperação automática é complementar e não bloqueia a primeira renderização.
+      Promise.resolve().then(()=>ensureControleOccurrenceRecords()).then(()=>render()).catch(error=>{
+        console.warn('A recuperação automática do Controle de Fichas falhou; os dados carregados foram mantidos.', error);
+      });
+    }
   }catch(e){
-    console.timeEnd('[SNAT] carregamento inicial records_light');
     console.error('Falha ao carregar registros do Supabase', e);
     // Nunca apague os dados que já estão em memória por causa de uma falha transitória.
     if(!records.length && !controleFichas.length && !producaoMensal.length){
@@ -2841,7 +2855,6 @@ async function upsertRecordsRemoteBatch(recordsToSave, options={}){
   if(!supabaseClient || !recordsToSave.length) return {saved:[], failed:recordsToSave.map(record=>({record,error:new Error('Banco de dados indisponível.')}))};
   const maxAttempts = options.maxAttempts || 3;
   const payload = recordsToSave.map(record=>({id:record.id, data:record, updated_at:new Date().toISOString()}));
-  const batchStartedAt = performance.now();
   const isTransient = error => {
     const status = Number(error?.status || error?.response?.status || 0);
     return !status || status === 408 || status === 425 || status === 429 || status >= 500;
@@ -2849,11 +2862,9 @@ async function upsertRecordsRemoteBatch(recordsToSave, options={}){
   for(let attempt=1; attempt<=maxAttempts; attempt++){
     try{
       const {error} = await supabaseClient.from('records').upsert(payload, {onConflict:'id'});
-      if(!error){ console.info('[SNAT] lote Controle concluído', {quantidade:recordsToSave.length, tentativa:attempt, ms:Math.round(performance.now()-batchStartedAt)}); return {saved:recordsToSave, failed:[]}; }
-      console.warn('[SNAT] erro no lote Controle', {quantidade:recordsToSave.length, tentativa:attempt, erro:error.message || String(error)});
+      if(!error) return {saved:recordsToSave, failed:[]};
       if(!isTransient(error) || attempt===maxAttempts) break;
     }catch(error){
-      console.warn('[SNAT] exceção no lote Controle', {quantidade:recordsToSave.length, tentativa:attempt, erro:error.message || String(error)});
       if(!isTransient(error) || attempt===maxAttempts) break;
     }
     await new Promise(resolve=>setTimeout(resolve,350*attempt));
@@ -3840,7 +3851,7 @@ function bindNavEvents(){
 async function startApp(){
   document.getElementById('appRoot').innerHTML = APP_SHELL_HTML;
   bindNavEvents();
-  await loadRecords();
+  await loadRecords(OPERATIONAL_YEAR, true);
   carregarPessoasProducao();
   render();
 }
@@ -3943,7 +3954,27 @@ function showToast(msg){
 }
 
 /* ============================= NAVEGAÇÃO ============================= */
-function goTo(v, id){
+async function ensureHistoricalYearLoaded(year){
+  const key=String(year);
+  if(loadedRecordYears.has(key)) return true;
+  if(!loadingRecordYears.has(key)){
+    const promise=loadRecords(key,false).finally(()=>loadingRecordYears.delete(key));
+    loadingRecordYears.set(key,promise);
+  }
+  try{
+    await loadingRecordYears.get(key);
+    return loadedRecordYears.has(key);
+  }catch(error){
+    console.error(`Falha ao carregar o Dashboard ${key}`, error);
+    showToast(`Não foi possível carregar os registros de ${key} agora.`);
+    return false;
+  }
+}
+async function goTo(v, id){
+  if(v==='analytics2025' || v==='analytics2024'){
+    const year=v.slice(-4);
+    if(!await ensureHistoricalYearLoaded(year)) return;
+  }
   view = v;
   if(v==='producaoDepartamento') producaoView = 'departamento';
   else if(v==='producaoJulio') producaoView = 'julio';
@@ -4826,8 +4857,6 @@ function digitacaoRecords(){
   return operationalRecords().filter(r=>r.status==='aguardando_digitacao' && r.pdfFicha);
 }
 async function ensureControleOccurrenceRecords(){
-  const syncStartedAt = performance.now();
-  console.time('[SNAT] sincronização Controle');
   const missing = operationalControleFichas().filter(item=>!controleFichaLinkedOccurrence(item));
   const pending=[];
   for(const item of missing){
@@ -4847,7 +4876,6 @@ async function ensureControleOccurrenceRecords(){
     pending.push(record);
   }
   const failed=[];
-  console.info('[SNAT] sincronização Controle iniciada', {faltantes:pending.length, lotes:Math.ceil(pending.length/50)});
   for(let offset=0; offset<pending.length; offset+=50){
     const result=await upsertRecordsRemoteBatch(pending.slice(offset,offset+50));
     records.push(...result.saved);
@@ -4857,8 +4885,6 @@ async function ensureControleOccurrenceRecords(){
     console.warn('Sincronização do Controle terminou com falhas parciais', failed.map(item=>item.record.id));
     showToast(`${failed.length} ficha(s) do Controle não foram sincronizadas. Tente novamente mais tarde.`);
   }
-  console.info('[SNAT] sincronização Controle concluída', {lotes:Math.ceil(pending.length/50), salvos:pending.length-failed.length, falhas:failed.length, ms:Math.round(performance.now()-syncStartedAt)});
-  console.timeEnd('[SNAT] sincronização Controle');
 }
 function controleFichaLinkedOccurrence(item){
   const byNumber = findLinkedRecord(item?.numeroFicha);
@@ -6648,22 +6674,17 @@ function cachePdfRecord(id, data){
   while(pdfRecordCache.size > 15) pdfRecordCache.delete(pdfRecordCache.keys().next().value);
 }
 async function fetchPdfRecord(id){
-  const pdfStartedAt = performance.now();
   const cached = pdfRecordCache.get(id);
   if(cached){
     pdfRecordCache.delete(id);
     pdfRecordCache.set(id, cached);
-    console.info('[SNAT] PDF atendido pelo cache', {id, ms:Math.round(performance.now()-pdfStartedAt)});
     return {data:{data:cached},error:null};
   }
   const controller = new AbortController();
   const timer = setTimeout(()=>controller.abort(), PDF_FETCH_TIMEOUT_MS);
   try{
-    const result = await supabaseClient.from('records').select('data').eq('id', id).limit(1).maybeSingle().abortSignal(controller.signal);
-    console.info('[SNAT] PDF buscado no Supabase', {id, ms:Math.round(performance.now()-pdfStartedAt), erro:result.error?.message || null});
-    return result;
+    return await supabaseClient.from('records').select('data').eq('id', id).limit(1).maybeSingle().abortSignal(controller.signal);
   }catch(error){
-    console.error('[SNAT] falha ao buscar PDF', {id, ms:Math.round(performance.now()-pdfStartedAt), erro:error.message || String(error)});
     if(error?.name === 'AbortError' || controller.signal.aborted) throw new Error('A busca do PDF excedeu 15 segundos. Verifique a conexão e tente novamente.');
     throw error;
   }finally{
