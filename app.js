@@ -2734,7 +2734,24 @@ function applyRecordsCursor(query, cursor){
   return query.or(`updated_at.gt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.gt.${cursor.id})`);
 }
 
-async function loadRecords(){
+function applyRecordsYearFilter(query, year, cursor){
+  if(!year) return applyRecordsCursor(query, cursor);
+  const nextYear = String(Number(year) + 1);
+  const dateFields = ['dataNotificacao','dataAcidente','dataAcidenteBio','dataDiagnosticoLD','dataDiagnosticoMental'];
+  const clauses = [`data->>anoReferencia.eq.${year}`, `id.like.excel${year}-*`];
+  dateFields.forEach(field=>{
+    clauses.push(`data->>${field}.gte.${year}-01-01`);
+    clauses.push(`data->>${field}.lt.${nextYear}-01-01`);
+  });
+  if(!cursor?.updatedAt) return query.or(clauses.join(','));
+  const cursorClauses = cursor.id
+    ? [`updated_at.gt.${cursor.updatedAt}`, `and(updated_at.eq.${cursor.updatedAt},id.gt.${cursor.id})`]
+    : [`updated_at.gt.${cursor.updatedAt}`];
+  const combined = clauses.flatMap(yearClause=>cursorClauses.map(cursorClause=>`and(${yearClause},${cursorClause})`));
+  return query.or(combined.join(','));
+}
+
+async function loadRecords(yearFilter=''){
   try{
     const allRows = [];
     let cursor = null;
@@ -2749,7 +2766,7 @@ async function loadRecords(){
             .order('updated_at', { ascending: true })
             .order('id', { ascending: true })
             .limit(RECORDS_PAGE_SIZE);
-          query = applyRecordsCursor(query, cursor);
+          query = applyRecordsYearFilter(query, yearFilter, cursor);
           result = await query;
           if(!result.error) break;
           lastError = result.error;
@@ -2770,7 +2787,7 @@ async function loadRecords(){
       }
       cursor = nextCursor;
     }
-    const loaded = allRows.map(row => row.data).filter(Boolean);
+    const loaded = allRows.map(row => row.data).filter(Boolean).filter(row=>!yearFilter || yearFromRecord(row)===String(yearFilter));
     controleFichas = dedupeControleFichas(loaded.filter(isControleFichaRecord).filter(isOperationalControleFicha).map(normalizeControleFichaRecord));
     producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
     const latestProductionMonth = producaoLatestMonth(producaoMensal);
@@ -3800,7 +3817,7 @@ function bindNavEvents(){
 async function startApp(){
   document.getElementById('appRoot').innerHTML = APP_SHELL_HTML;
   bindNavEvents();
-  await loadRecords();
+  await loadRecords(OPERATIONAL_YEAR);
   carregarPessoasProducao();
   render();
 }
