@@ -2717,6 +2717,8 @@ const PRODUCAO_SIA_SUS_CODES = [
 const SUPABASE_URL = 'https://rjcjvxxmfvasymcncrge.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_OqhyfChr2RxPl3xfxAPyuQ_sge3PV7j';
 let supabaseClient = null;
+const pdfRecordCache = new Map();
+const PDF_FETCH_TIMEOUT_MS = 15000;
 try{
   supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 }catch(e){
@@ -2824,6 +2826,31 @@ async function deleteRecordRemote(id){
     console.error('Falha ao excluir no Supabase', e);
     return false;
   }
+}
+async function upsertRecordsRemoteBatch(recordsToSave, options={}){
+  if(!supabaseClient || !recordsToSave.length) return {saved:[], failed:recordsToSave.map(record=>({record,error:new Error('Banco de dados indisponível.')}))};
+  const maxAttempts = options.maxAttempts || 3;
+  const payload = recordsToSave.map(record=>({id:record.id, data:record, updated_at:new Date().toISOString()}));
+  const isTransient = error => {
+    const status = Number(error?.status || error?.response?.status || 0);
+    return !status || status === 408 || status === 425 || status === 429 || status >= 500;
+  };
+  for(let attempt=1; attempt<=maxAttempts; attempt++){
+    try{
+      const {error} = await supabaseClient.from('records').upsert(payload, {onConflict:'id'});
+      if(!error) return {saved:recordsToSave, failed:[]};
+      if(!isTransient(error) || attempt===maxAttempts) break;
+    }catch(error){
+      if(!isTransient(error) || attempt===maxAttempts) break;
+    }
+    await new Promise(resolve=>setTimeout(resolve,350*attempt));
+  }
+  const saved=[]; const failed=[];
+  for(const record of recordsToSave){
+    if(await upsertRecordRemote(record)) saved.push(record);
+    else failed.push({record,error:new Error(`Falha ao salvar o registro ${record.id}`)});
+  }
+  return {saved, failed};
 }
 async function upsertProducaoRemote(item){
   try{
@@ -4787,6 +4814,7 @@ function digitacaoRecords(){
 }
 async function ensureControleOccurrenceRecords(){
   const missing = operationalControleFichas().filter(item=>!controleFichaLinkedOccurrence(item));
+  const pending=[];
   for(const item of missing){
     const record = {
       id:uid(),
@@ -4801,7 +4829,17 @@ async function ensureControleOccurrenceRecords(){
       createdAt:new Date().toISOString(),
     };
     if(!record.fichaNumero && !record.patientName) continue;
-    if(await upsertRecordRemote(record)) records.push(record);
+    pending.push(record);
+  }
+  const failed=[];
+  for(let offset=0; offset<pending.length; offset+=50){
+    const result=await upsertRecordsRemoteBatch(pending.slice(offset,offset+50));
+    records.push(...result.saved);
+    failed.push(...result.failed);
+  }
+  if(failed.length){
+    console.warn('Sincronização do Controle terminou com falhas parciais', failed.map(item=>item.record.id));
+    showToast(`${failed.length} ficha(s) do Controle não foram sincronizadas. Tente novamente mais tarde.`);
   }
 }
 function controleFichaLinkedOccurrence(item){
@@ -6581,28 +6619,62 @@ async function getPdfBrowserUrl(attachment){
   }
   return {url:await getPdfAttachmentUrl(attachment), revoke:false};
 }
+function showPdfLoading(){
+  if(document.getElementById('pdfLoadingModal')) return;
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-bg" id="pdfLoadingModal"><div class="modal pdf-loading-modal"><span class="pdf-spinner" aria-hidden="true"></span><h3>Carregando PDF</h3><p>Buscando o arquivo da ficha. O restante do sistema continua disponível.</p></div></div>');
+}
+function hidePdfLoading(){ document.getElementById('pdfLoadingModal')?.remove(); }
+function cachePdfRecord(id, data){
+  if(pdfRecordCache.has(id)) pdfRecordCache.delete(id);
+  pdfRecordCache.set(id, data);
+  while(pdfRecordCache.size > 15) pdfRecordCache.delete(pdfRecordCache.keys().next().value);
+}
+async function fetchPdfRecord(id){
+  const cached = pdfRecordCache.get(id);
+  if(cached){
+    pdfRecordCache.delete(id);
+    pdfRecordCache.set(id, cached);
+    return {data:{data:cached},error:null};
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), PDF_FETCH_TIMEOUT_MS);
+  try{
+    return await supabaseClient.from('records').select('data').eq('id', id).limit(1).maybeSingle().abortSignal(controller.signal);
+  }catch(error){
+    if(error?.name === 'AbortError' || controller.signal.aborted) throw new Error('A busca do PDF excedeu 15 segundos. Verifique a conexão e tente novamente.');
+    throw error;
+  }finally{
+    clearTimeout(timer);
+  }
+}
 async function openPdfForRecord(id){
   let record = records.find(r=>r.id===id);
+  const tab = window.open('about:blank', '_blank');
+  if(!tab){ showToast('O navegador bloqueou a nova aba. Permita pop-ups para abrir o PDF.'); return; }
   // Os PDFs não são carregados no início. Busque o conteúdo completo somente
-  // quando o usuário solicitar a abertura do arquivo.
+  // quando o usuário solicitar a abertura do arquivo e reaproveite-o na sessão.
   if(record?.pdfFicha && !record.pdfFicha.dataUrl && !record.pdfFicha.path){
+    showPdfLoading();
     try{
-      const {data, error} = await supabaseClient.from('records').select('data').eq('id', id).limit(1).maybeSingle();
+      const result = await fetchPdfRecord(id);
+      const {data, error} = result;
       if(error) throw error;
       if(data?.data){
+        cachePdfRecord(id,data.data);
         record = {...record, ...data.data};
         const index = records.findIndex(item=>item.id===id);
         if(index >= 0) records[index] = record;
       }
     }catch(error){
       console.error('Falha ao carregar o PDF sob demanda', error);
-      showToast('Não foi possível carregar o PDF agora.');
+      tab.close();
+      hidePdfLoading();
+      showToast('Não foi possível carregar o PDF agora. '+(error.message||'Tente novamente.'));
       return;
     }
+    hidePdfLoading();
   }
-  if(!record?.pdfFicha){ showToast('Esta ficha não possui PDF anexado.'); return; }
-  const tab = window.open('about:blank', '_blank');
-  if(!tab){ showToast('O navegador bloqueou a nova aba. Permita pop-ups para abrir o PDF.'); return; }
+  if(!record?.pdfFicha){ tab.close(); showToast('Esta ficha não possui PDF anexado.'); return; }
   try{
     const result = await getPdfBrowserUrl(record.pdfFicha);
     if(!result.url){ tab.close(); showToast('Não foi possível abrir o PDF anexado.'); return; }
