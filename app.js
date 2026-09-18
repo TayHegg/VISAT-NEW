@@ -6508,13 +6508,18 @@ function setPdfPreviewLayout(collapsed){
 }
 function refreshPdfPreviewPanel(){
   const host = document.getElementById('pdfPreviewPanelHost');
-  if(host) host.innerHTML = renderPdfPreviewPanel();
+  // O iframe do visualizador nativo pode iniciar seleção de texto enquanto o
+  // painel ainda está sendo inserido/removido. Só mutamos um host conectado.
+  if(host?.isConnected) host.innerHTML = renderPdfPreviewPanel();
   const button = document.querySelector('.pdf-view-btn');
   if(button){
     button.disabled = !(pdfAttachmentState.file || pdfAttachmentState.attachment);
     button.textContent = pdfPreviewState.open ? 'Fechar visualização' : 'Visualizar ficha';
   }
   setPdfPreviewLayout(pdfPreviewState.open);
+}
+function waitForPdfDomPaint(){
+  return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 }
 function clearPdfPreview(){
   if(pdfPreviewState.revoke && pdfPreviewState.url) URL.revokeObjectURL(pdfPreviewState.url);
@@ -6554,6 +6559,13 @@ async function previewCurrentPdf(){
   if(!url){ showToast('Não foi possível abrir o arquivo anexado.'); return; }
   pdfPreviewState = {open:true, url, revoke, kind, name};
   refreshPdfPreviewPanel();
+  await waitForPdfDomPaint();
+  const panel = document.getElementById('pdfPreviewPanel');
+  if(!panel?.isConnected){
+    clearPdfPreview();
+    refreshPdfPreviewPanel();
+    showToast('Não foi possível montar o visualizador do PDF. Tente novamente.');
+  }
 }
 function sanitizeFileName(name){
   return String(name || 'ficha.pdf').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(-100) || 'ficha.pdf';
@@ -6722,6 +6734,9 @@ async function openPdfForRecord(id){
   try{
     const result = await getPdfBrowserUrl(record.pdfFicha);
     if(!result.url){ tab.close(); showToast('Não foi possível abrir o PDF anexado.'); return; }
+    // Aguarda a conclusão do handler antes de navegar a aba em branco, evitando
+    // corrida entre o contexto da página e o visualizador nativo do navegador.
+    await waitForPdfDomPaint();
     tab.location.href = result.url;
     if(result.revoke) setTimeout(()=>URL.revokeObjectURL(result.url), 120000);
   }catch(error){
