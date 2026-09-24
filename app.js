@@ -5067,9 +5067,8 @@ function parseBatchPdfName(name){
   return {number, patientName, agravoType, displayName:base};
 }
 function batchItemStatus(item){
-  if(!item.record) return item.patientName ? 'new' : 'bad';
+  if(!item.record) return item.number ? 'new' : 'bad';
   if(item.record.pdfFicha) return 'warn';
-  if(!duplicateNamesMatch(item.patientName, item.record.patientName) && batchNormalize(item.patientName)!==batchNormalize(item.record.patientName)) return 'warn';
   return 'ok';
 }
 function updateBatchImportProgress(done,total){
@@ -5091,7 +5090,7 @@ function renderBatchImportModal(){
   }).join('') : '<div class="empty-state" style="padding:24px">Selecione um arquivo ZIP para analisar.</div>';
   return `<div class="modal-bg" id="batchImportModal" onclick="if(event.target===this)closeBatchImport()"><div class="modal batch-import-modal">
     <h3>Importar PDFs em lote</h3>
-    <p class="batch-import-help">Aceita <b>20 - AT - NOME.pdf</b> ou, para fichas sem número, <b>AT - NOME.pdf</b>. Nesse caso, cria o registro apenas com agravo, nome e PDF. PDFs existentes nunca são substituídos automaticamente.</p>
+    <p class="batch-import-help">O número da ficha são os <b>três primeiros dígitos</b> do nome, como <b>434_007703.pdf</b> ou <b>456 - AT - NOME.pdf</b>. Se a ficha já existir sem PDF, o arquivo será anexado. Se não existir, será criado um registro com somente o número da ficha e o PDF, com status “Aguardando Digitação”.</p>
     <input id="batchZipInput" type="file" accept=".zip,application/zip" onchange="analyzeBatchZip(this)">
     ${items.length ? `<div class="batch-import-summary"><span class="ok">${ready} prontos</span><span class="ok">${created} fichas novas</span><span class="warn">${warn} para conferir</span><span class="bad">${bad} sem correspondência</span></div><div class="batch-import-list">${rows}</div>` : ''}
     ${batchImportState.processing ? `<div id="batchImportProgress" class="batch-import-progress" role="status" aria-live="polite">Processando ${batchImportState.progress || 0} de ${ready} ficha(s)…</div>` : ''}
@@ -5144,7 +5143,7 @@ async function processBatchImport(){
   for(let itemIndex=0; itemIndex<total; itemIndex++){
     const item = selectedItems[itemIndex];
     try{
-      const baseRecord=item.record || {id:uid(), ...(item.number ? {fichaNumero:item.number} : {}), patientName:item.patientName, agravoType:item.agravoType || 'grave', status:'aguardando_digitacao', anoReferencia:OPERATIONAL_YEAR, createdAt:new Date().toISOString()};
+      const baseRecord=item.record || {id:uid(), fichaNumero:item.number, patientName:'', agravoType:'grave', status:'aguardando_digitacao', anoReferencia:OPERATIONAL_YEAR, createdAt:new Date().toISOString()};
       const attachment=await uploadPdfAttachment(baseRecord.id,item.file);
       const updated={...baseRecord,pdfFicha:attachment};
       if(!await upsertRecordRemote(updated)) throw new Error('falha ao salvar a ficha');
