@@ -6656,9 +6656,8 @@ async function uploadPdfAttachment(recordId, file){
 }
 function fichaNumberFromPdfName(name){
   const base = String(name || '').replace(/\.pdf$/i,'');
-  const matches = base.match(/(^|[^0-9])([0-9]{1,8})(?=[^0-9]|$)/g) || [];
-  const values = matches.map(value=>value.replace(/[^0-9]/g,'')).filter(Boolean);
-  return values.length ? values[values.length - 1] : '';
+  const firstToken = base.match(/(?:^|[^0-9])([0-9]{3})(?![0-9])/);
+  return firstToken ? firstToken[1] : '';
 }
 function isFicha2026Record(record){
   if(isImported2026Record(record)) return true;
@@ -6705,7 +6704,7 @@ function renderBatchPdfImport(){
       <button id="batchPdfButton" type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('batchPdfInput').click()">Adicionar PDFs em lote</button>
       <span id="batchPdfStatus" class="batch-pdf-status">${esc(batchPdfStatusText())}</span>
     </div>
-    <p class="hint">Use nomes como <b>425.pdf</b>, <b>ficha_425.pdf</b> ou <b>ficha-425-investigacao.pdf</b>. PDFs sem número, fichas inexistentes ou números repetidos não serão gravados.</p>
+    <p class="hint">O número da ficha são os <b>3 primeiros dígitos</b>: <b>434_007703.pdf</b> anexa na ficha 434 e <b>456 - AT - nome.pdf</b> anexa na ficha 456. PDFs sem 3 dígitos, fichas inexistentes ou números repetidos não serão gravados.</p>
     <div id="batchPdfResult">${renderBatchPdfResult()}</div>
   </section>`;
 }
