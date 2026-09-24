@@ -2662,6 +2662,7 @@ let formData = {};
 let pdfAttachmentState = {file:null, attachment:null, loading:false, error:''};
 let pdfPreviewState = {open:false, url:'', revoke:false, kind:'application/pdf', name:''};
 let pdfAutoState = {active:false, processing:false, filled:[], unresolved:[], warnings:[], text:''};
+let batchPdfState = {processing:false, current:0, total:0, success:[], errors:[], skipped:[], message:''};
 let tableState = { search:'', quickFicha:'', quickPatient:'', sortKey:'fichaNumero', sortDir:1, filterAgravo:'', filterStatus:'', filterSituacao:'', page:1, pageSize:10 };
 let dashFilters = { ano:'2026', periodoIni:'', periodoFim:'', mes:'', agravo:'', unidade:'', municipio:'', bairro:'', ocupacao:'', sexo:'', racaCor:'', escolaridade:'', tipoAcidente:'', status:'', obito:'' };
 let bmSelectedRegion = null;
@@ -5192,6 +5193,7 @@ function renderConsulta(){
         <span>Pesquise pelo nome completo ou parte dele.</span>
       </div>
     </div>
+    ${renderBatchPdfImport()}
     <div class="toolbar">
       <div class="search-box">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -6651,6 +6653,108 @@ async function uploadPdfAttachment(recordId, file){
   }
   const dataUrl = await readFileAsDataUrl(file);
   return {mode:'record', name:file.name, size:file.size, contentType:'application/pdf', dataUrl, uploadedAt:new Date().toISOString()};
+}
+function fichaNumberFromPdfName(name){
+  const base = String(name || '').replace(/\.pdf$/i,'');
+  const matches = base.match(/(^|[^0-9])([0-9]{1,8})(?=[^0-9]|$)/g) || [];
+  const values = matches.map(value=>value.replace(/[^0-9]/g,'')).filter(Boolean);
+  return values.length ? values[values.length - 1] : '';
+}
+function isFicha2026Record(record){
+  if(isImported2026Record(record)) return true;
+  const dates = [record?.dataNotificacao, record?.dataAcidente, record?.dataLancamento, record?.createdAt, record?.updatedAt];
+  return dates.some(value=>String(value || '').slice(0,4) === '2026');
+}
+function batchPdfStatusText(){
+  const state = batchPdfState;
+  if(state.processing) return `Processando PDF ${state.current} de ${state.total}... Não feche esta tela.`;
+  if(state.message) return state.message;
+  return 'Selecione vários PDFs. O número da ficha deve aparecer no nome do arquivo, por exemplo: ficha_425.pdf.';
+}
+function refreshBatchPdfStatus(){
+  const host = document.getElementById('batchPdfStatus');
+  if(!host) return;
+  const state = batchPdfState;
+  const details = state.processing ? '' : ` ${state.success.length} anexado(s), ${state.errors.length} erro(s) e ${state.skipped.length} ignorado(s).`;
+  host.textContent = `${batchPdfStatusText()}${details}`;
+  host.className = `batch-pdf-status ${state.errors.length ? 'has-errors' : ''}`;
+  const input = document.getElementById('batchPdfInput');
+  const button = document.getElementById('batchPdfButton');
+  if(input) input.disabled = state.processing;
+  if(button){ button.disabled = state.processing; button.textContent = state.processing ? 'Processando...' : 'Adicionar PDFs em lote'; }
+}
+function renderBatchPdfResult(){
+  const state = batchPdfState;
+  if(state.processing || (!state.success.length && !state.errors.length && !state.skipped.length)) return '';
+  const lines = [
+    ...state.success.map(item=>`<li class="batch-ok">Ficha ${esc(item.ficha)} — ${esc(item.name)}</li>`),
+    ...state.errors.map(item=>`<li class="batch-error">${esc(item.name)} — ${esc(item.message)}</li>`),
+    ...state.skipped.map(item=>`<li class="batch-skip">${esc(item.name)} — ${esc(item.message)}</li>`),
+  ];
+  return `<details class="batch-pdf-result" open><summary>Resultado da importação</summary><ul>${lines.join('')}</ul></details>`;
+}
+function renderBatchPdfImport(){
+  return `<section class="batch-pdf-panel" aria-labelledby="batchPdfTitle">
+    <div class="batch-pdf-heading">
+      <div><h3 id="batchPdfTitle">Adicionar PDFs em lote às fichas já cadastradas</h3>
+      <p>Selecione vários arquivos PDF. O sistema localizará o número no nome do arquivo e anexará cada documento somente à ficha correspondente de 2026.</p></div>
+      <span class="batch-pdf-badge">1 por vez</span>
+    </div>
+    <div class="batch-pdf-actions">
+      <input id="batchPdfInput" type="file" accept="application/pdf,.pdf" multiple onchange="handleBatchPdfFiles(this.files)" aria-label="Selecionar vários PDFs">
+      <button id="batchPdfButton" type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('batchPdfInput').click()">Adicionar PDFs em lote</button>
+      <span id="batchPdfStatus" class="batch-pdf-status">${esc(batchPdfStatusText())}</span>
+    </div>
+    <p class="hint">Use nomes como <b>425.pdf</b>, <b>ficha_425.pdf</b> ou <b>ficha-425-investigacao.pdf</b>. PDFs sem número, fichas inexistentes ou números repetidos não serão gravados.</p>
+    <div id="batchPdfResult">${renderBatchPdfResult()}</div>
+  </section>`;
+}
+async function uploadBatchPdfToStorage(recordId, file){
+  if(!supabaseClient || !currentUser) throw new Error('Sessão ou conexão com o armazenamento indisponível.');
+  const fileName = `${recordId}-${Date.now()}-${sanitizeFileName(file.name)}`;
+  const storagePath = `${currentUser.id}/${fileName}`;
+  const {data, error} = await supabaseClient.storage.from(PDF_BUCKET).upload(storagePath, file, {contentType:'application/pdf', upsert:false});
+  if(error) throw new Error('Não foi possível enviar o arquivo para o armazenamento. Nenhuma ficha foi alterada.');
+  return {mode:'storage', name:file.name, size:file.size, contentType:'application/pdf', path:data?.path || storagePath, uploadedAt:new Date().toISOString()};
+}
+function waitBatchPdf(ms){ return new Promise(resolve=>setTimeout(resolve, ms)); }
+async function handleBatchPdfFiles(fileList){
+  if(batchPdfState.processing) return;
+  const files = Array.from(fileList || []).filter(file=>/\.pdf$/i.test(file.name) || file.type === 'application/pdf');
+  if(!files.length){ showToast('Selecione pelo menos um arquivo PDF.'); return; }
+  batchPdfState = {processing:true, current:0, total:files.length, success:[], errors:[], skipped:[], message:''};
+  refreshBatchPdfStatus();
+  render();
+  for(let index=0; index<files.length; index++){
+    const file = files[index];
+    batchPdfState.current = index + 1;
+    refreshBatchPdfStatus();
+    const ficha = fichaNumberFromPdfName(file.name);
+    const matches = records.filter(record=>isFicha2026Record(record) && String(record.fichaNumero || '').replace(/\D/g,'') === ficha);
+    if(!ficha){ batchPdfState.skipped.push({name:file.name, message:'número da ficha não encontrado no nome do arquivo.'}); continue; }
+    if(file.size > PDF_MAX_BYTES){ batchPdfState.skipped.push({name:file.name, message:`arquivo maior que ${formatFileSize(PDF_MAX_BYTES)}.`}); continue; }
+    if(matches.length !== 1){ batchPdfState.skipped.push({name:file.name, message:matches.length ? 'há mais de uma ficha com este número.' : `ficha ${ficha} não encontrada entre as fichas cadastradas de 2026.`}); continue; }
+    const record = matches[0];
+    try{
+      const attachment = await uploadBatchPdfToStorage(record.id, file);
+      const updatedRecord = {...record, pdfFicha:attachment, updatedAt:new Date().toISOString()};
+      const saved = await upsertRecordRemote(updatedRecord);
+      if(!saved){
+        try{ await supabaseClient.storage.from(PDF_BUCKET).remove([attachment.path]); }catch(cleanupError){ console.warn('Não foi possível remover o PDF órfão.', cleanupError); }
+        throw new Error('PDF enviado, mas não foi possível confirmar a atualização da ficha. Verifique o armazenamento antes de repetir.');
+      }
+      Object.assign(record, updatedRecord);
+      batchPdfState.success.push({ficha, name:file.name});
+    }catch(error){
+      batchPdfState.errors.push({name:file.name, message:error?.message || 'falha inesperada.'});
+    }
+    await waitBatchPdf(250);
+  }
+  batchPdfState.processing = false;
+  batchPdfState.message = 'Importação concluída. Os PDFs foram processados individualmente para reduzir a carga no sistema.';
+  refreshBatchPdfStatus();
+  render();
+  showToast(`Importação concluída: ${batchPdfState.success.length} PDF(s) anexado(s).`);
 }
 async function getPdfAttachmentUrl(attachment){
   if(!attachment) return '';
