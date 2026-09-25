@@ -5054,20 +5054,23 @@ function parseBatchPdfName(name){
   // de qualquer validação do agravo, para não transformar uma ficha numerada
   // em ficha sem número quando o nome do agravo for diferente.
   const stem = base.replace(/\.pdf\s*$/i,'').trim();
-  const numberedMatch = stem.match(/^(?:ficha\s*|n[ºo°]?\s*)?[\[\(]?\s*(\d+)\s*[\]\)]?\s*(?:-|–|—|_)\s*(.+)$/i);
-  const remainder = numberedMatch ? numberedMatch[2] : stem;
+  const numberedMatch = stem.match(/^(?:ficha\s*|n[ºo°]?\s*)?[\[\(]?\s*(\d+)\s*[\]\)]?\s*(?:\.|-|–|—|_)\s*(.*)$/i);
+  const numberOnlyMatch = stem.match(/^(?:ficha\s*|n[ºo°]?\s*)?[\[\(]?\s*(\d+)\s*[\]\)]?\s*$/i);
+  const remainder = numberedMatch ? numberedMatch[2] : '';
+  if(!numberedMatch && numberOnlyMatch) return {number:String(Number(numberOnlyMatch[1])), patientName:'', agravoType:'grave', displayName:base};
+  if(!numberedMatch) return {number:'', patientName:'', agravoType:'grave', displayName:base};
   const parts = remainder.split(/\s*(?:-|–|—|_)\s*/).map(part=>part.trim()).filter(Boolean);
-  if(!parts.length) return {number:'', patientName:'', displayName:base};
-  const number = numberedMatch ? String(Number(numberedMatch[1])) : '';
-  const typeToken = numberedMatch && parts.length > 1 ? parts[0].toUpperCase() : (parts[0] || '').toUpperCase();
-  const patientName = (numberedMatch && parts.length > 1 ? parts.slice(1).join(' - ') : parts.slice(1).join(' - ')).trim();
-  if(!patientName) return {number:'', patientName:'', displayName:base};
+  const number = String(Number(numberedMatch[1]));
+  const typeToken = parts[0] || '';
+  const patientName = parts.length > 1 ? parts.slice(1).join(' - ').trim() : '';
   const normalizedTypeToken = typeToken.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.\s/_-]/g, '');
   const agravoType = normalizedTypeToken === 'ATMRT' ? 'mental' : normalizedTypeToken === 'ATMB' ? 'biologico' : normalizedTypeToken === 'LERDORT' ? 'lerdort' : 'grave';
   return {number, patientName, agravoType, displayName:base};
 }
 function batchItemStatus(item){
-  if(!item.record) return item.number ? 'new' : 'bad';
+  if(!item.number) return 'bad';
+  if(item.matchCount > 1) return 'warn';
+  if(!item.record) return 'new';
   if(item.record.pdfFicha) return 'warn';
   return 'ok';
 }
@@ -5085,7 +5088,7 @@ function renderBatchImportModal(){
   const warn = items.filter(x=>x.status==='warn').length;
   const bad = items.filter(x=>x.status==='bad').length;
   const rows = items.length ? items.map((item,index)=>{
-    const statusText = item.status==='ok' ? `Pronto para anexar à ficha ${item.record?.fichaNumero}` : item.status==='new' ? `${item.number ? `Ficha ${item.number}` : 'Registro sem número'}: será criado como “Aguardando Digitação” e ficará disponível para digitação/complementação` : item.status==='warn' ? (item.record?.pdfFicha ? 'Já existe PDF anexado; não será substituído' : `Divergência de nome: sistema tem “${item.record?.patientName || 'sem nome'}”`) : 'Sem correspondência ou nome fora do padrão';
+    const statusText = item.status==='ok' ? `Pronto para anexar à ficha ${item.record?.fichaNumero}` : item.status==='new' ? `Ficha ${item.number}: será criada como “Aguardando Digitação” e ficará disponível para digitação/complementação` : item.status==='warn' ? (item.matchCount > 1 ? `Há ${item.matchCount} registros com este número; não será associado automaticamente` : 'Já existe PDF anexado; não será substituído') : 'Número ou nome fora do padrão';
     return `<label class="batch-import-item ${item.status}"><input type="checkbox" data-batch-index="${index}" ${item.status==='ok'||item.status==='new'?'checked':''} ${item.status==='ok'||item.status==='new'?'':'disabled'}><span><strong>${esc(item.displayName)}</strong><small>${esc(statusText)}</small></span></label>`;
   }).join('') : '<div class="empty-state" style="padding:24px">Selecione um arquivo ZIP para analisar.</div>';
   return `<div class="modal-bg" id="batchImportModal" onclick="if(event.target===this)closeBatchImport()"><div class="modal batch-import-modal">
@@ -5117,10 +5120,9 @@ async function analyzeBatchZip(input){
       // portanto a correspondência deve considerar exclusivamente as fichas operacionais do ano.
       // Nunca associe um PDF sem número ao primeiro registro que também esteja sem número.
       // PDFs sem número devem criar um novo registro com o nome extraído do arquivo.
-      const record=parsed.number ? operationalRecords()
-        .filter(r=>batchFichaKey(r.fichaNumero)===batchFichaKey(parsed.number))
-        .sort((a,b)=>Number(Boolean(b.patientName))-Number(Boolean(a.patientName)))[0] || null : null;
-      const item={...parsed,file,record,status:'bad'};
+      const matches=parsed.number ? operationalRecords().filter(r=>batchFichaKey(r.fichaNumero)===batchFichaKey(parsed.number)) : [];
+      const record=matches.length===1 ? matches[0] : null;
+      const item={...parsed,file,record,matchCount:matches.length,status:'bad'};
       item.status=batchItemStatus(item);
       items.push(item);
     }
