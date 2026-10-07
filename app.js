@@ -4910,7 +4910,15 @@ function renderControleConferenciaBox(){
 }
 function renderDigitacaoDrawer(){
   if(!digitacaoDrawerOpen) return '';
-  const list=digitacaoRecords();
+  const list=digitacaoRecords().slice().sort((a,b)=>{
+    const aText=String(a.fichaNumero ?? '').trim();
+    const bText=String(b.fichaNumero ?? '').trim();
+    const aHasNumber=/^\d+$/.test(aText);
+    const bHasNumber=/^\d+$/.test(bText);
+    if(aHasNumber && bHasNumber) return Number(aText)-Number(bText);
+    if(aHasNumber !== bHasNumber) return aHasNumber ? -1 : 1;
+    return 0;
+  });
   return `<div class="digitacao-drawer" role="dialog" aria-label="Fichas aguardando digitação">
     <div class="digitacao-drawer-header"><div><strong>Aguardando Digitação</strong><span>${list.length} ficha(s) com PDF anexado</span></div><button type="button" class="btn btn-ghost btn-sm" onclick="toggleDigitacaoDrawer()">Fechar</button></div>
     <div class="digitacao-drawer-body">${list.length ? `<div class="selection-list">${list.map(r=>`<div class="selection-item" onclick="goTo('form','${esc(r.id)}')"><div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span><span class="selection-agravo">Local: ${esc(recordLocation(r))}</span></div><div class="selection-item-meta"><span class="badge amber">PDF anexado</span><span>Completar digitação →</span></div></div>`).join('')}</div>` : '<div class="empty-mini">Nenhuma ficha aguardando digitação.</div>'}</div>
