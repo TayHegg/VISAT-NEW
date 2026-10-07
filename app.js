@@ -4913,9 +4913,11 @@ function renderDigitacaoDrawer(){
   const list=digitacaoRecords().slice().sort((a,b)=>{
     const aText=String(a.fichaNumero ?? '').trim();
     const bText=String(b.fichaNumero ?? '').trim();
-    const aHasNumber=/^\d+$/.test(aText);
-    const bHasNumber=/^\d+$/.test(bText);
-    if(aHasNumber && bHasNumber) return Number(aText)-Number(bText);
+    const aMatch=aText.match(/\d+/);
+    const bMatch=bText.match(/\d+/);
+    const aHasNumber=Boolean(aMatch);
+    const bHasNumber=Boolean(bMatch);
+    if(aHasNumber && bHasNumber) return Number(aMatch[0])-Number(bMatch[0]);
     if(aHasNumber !== bHasNumber) return aHasNumber ? -1 : 1;
     return 0;
   });
