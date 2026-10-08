@@ -40,6 +40,7 @@ body{margin:0;font-family:var(--font-body);background:var(--bg);color:var(--text
 .btn:active{transform:scale(.97);}
 .btn-primary{background:var(--primary);color:#fff;}
 .btn-primary:hover{background:var(--primary-2);}
+.btn:disabled{opacity:.55;cursor:not-allowed;transform:none;}
 .btn-ghost{background:transparent;color:var(--primary);border:1px solid var(--border);}
 .btn-ghost:hover{background:var(--surface-2);}
 .btn-sm{padding:6px 10px;font-size:12.5px;border-radius:6px;}
@@ -128,6 +129,20 @@ tr:hover td{background:var(--surface-2);}
 .ac-item:hover{background:var(--surface-2);}
 .ac-item b{color:var(--primary);font-family:var(--font-mono);}
 .form-actions{position:sticky;bottom:0;background:var(--surface);border-top:1px solid var(--border);padding:14px 20px;display:flex;justify-content:space-between;border-radius:0 0 var(--radius) var(--radius);margin:0 -20px -18px;}
+.whatsapp-panel{border-top:3px solid #1B8A72;}
+.whatsapp-panel-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;}
+.whatsapp-panel-heading h2{margin-bottom:4px;}
+.whatsapp-panel-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 12px;}
+.whatsapp-history{max-height:280px;overflow-y:auto;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);}
+.whatsapp-empty{color:var(--text-muted);font-size:12px;text-align:center;padding:18px 8px;}
+.whatsapp-bubble-row{display:flex;margin:6px 0;}
+.whatsapp-bubble-row.out{justify-content:flex-end;}
+.whatsapp-bubble{max-width:78%;padding:8px 10px;border-radius:9px;font-size:12.5px;line-height:1.4;box-shadow:0 1px 1px rgba(15,59,77,.04);}
+.whatsapp-bubble.out{background:#DCF8C6;}
+.whatsapp-bubble.in{background:#fff;border:1px solid var(--border);}
+.whatsapp-bubble-text{white-space:pre-wrap;overflow-wrap:anywhere;}
+.whatsapp-bubble small{display:block;margin-top:4px;color:var(--text-muted);font-size:10px;}
+@media (max-width:640px){.whatsapp-panel-heading{flex-direction:column;}.whatsapp-panel-heading .btn{width:100%;justify-content:center;}.whatsapp-bubble{max-width:90%;}}
 .empty-state{text-align:center;padding:60px 20px;color:var(--text-muted);}
 .empty-state svg{width:44px;height:44px;color:var(--border);margin-bottom:10px;}
 .toast{position:fixed;bottom:22px;right:22px;background:var(--primary);color:#fff;padding:12px 18px;border-radius:8px;font-size:13.5px;box-shadow:var(--shadow);z-index:100;display:flex;align-items:center;gap:8px;animation:slideup .25s ease;}
