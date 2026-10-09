@@ -2710,7 +2710,7 @@ const SUPABASE_KEY = 'sb_publishable_OqhyfChr2RxPl3xfxAPyuQ_sge3PV7j';
 let supabaseClient = null;
 const pdfRecordCache = new Map();
 const PDF_FETCH_TIMEOUT_MS = 15000;
-const RECORDS_PAGE_SIZE = 500;
+const RECORDS_PAGE_SIZE = 1000;
 const loadedRecordYears = new Set();
 const loadingRecordYears = new Map();
 const historicalRecordsCache = new Map();
@@ -2728,7 +2728,14 @@ function applyRecordsCursor(query, cursor){
   return query.or(`updated_at.gt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.gt.${cursor.id})`);
 }
 
-async function loadRecordsFromSource(source){
+function applyRecordYearFilter(query, year){
+  const value = String(year || '');
+  if(!/^\d{4}$/.test(value)) return query;
+  const nextYear = String(Number(value) + 1);
+  return query.or(`data->>anoReferencia.eq.${value},id.like.excel${value}-*,and(data->>dataNotificacao.gte.${value}-01-01,data->>dataNotificacao.lt.${nextYear}-01-01)`);
+}
+
+async function loadRecordsFromSource(source, year=''){
   const allRows = [];
   let cursor = null;
   for(;;){
@@ -2740,6 +2747,7 @@ async function loadRecordsFromSource(source){
           .from(source)
           .select(source === 'records_light_cache' ? 'id,data,updated_at' : 'data')
           .order('updated_at', { ascending: true });
+        query = applyRecordYearFilter(query, year);
         if(source === 'records_light_cache'){
           query = query.order('id', { ascending: true }).limit(RECORDS_PAGE_SIZE);
           query = applyRecordsCursor(query, cursor);
@@ -2779,20 +2787,18 @@ async function loadRecords(year=OPERATIONAL_YEAR, initial=false){
   try{
     let allRows;
     try{
-      allRows = await loadRecordsFromSource('records_light_cache');
+      allRows = await loadRecordsFromSource('records_light_cache', year);
     }catch(lightError){
       console.warn('Cache leve indisponível; usando a tabela principal como fallback.', lightError);
-      allRows = await loadRecordsFromSource('records');
+      allRows = await loadRecordsFromSource('records', year);
     }
     const loaded = allRows.map(row => row.data).filter(Boolean);
     if(initial){
       controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
       producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
-      ['2024','2025',OPERATIONAL_YEAR].forEach(target=>{
-        historicalRecordsCache.set(String(target), loaded.filter(row=>yearFromRecord(row)===String(target) && !isControleFichaRecord(row) && !isProducaoMensalRecord(row)));
-      });
     }
     const loadedRecords = loaded.filter(row=>yearFromRecord(row)===String(year) && !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
+    historicalRecordsCache.set(String(year), loadedRecords);
     if(initial) records = loadedRecords;
     else{
       const knownIds = new Set(records.map(row=>row.id));
