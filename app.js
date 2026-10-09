@@ -2669,6 +2669,8 @@ let analyticsCardFilter = null;
 let analyticsDrawerOpen = false;
 
 let controleFichas = [];
+let linkedRecordIndex = null;
+let operationalControleFichasCache = null;
 let controleTab = 'todas';
 let controleBuscaNumero = '';
 let controleBuscaNome = '';
@@ -2715,7 +2717,7 @@ const PDF_FETCH_TIMEOUT_MS = 10000;
 const RECORDS_PAGE_SIZE = 1000;
 const RECORD_QUERY_TIMEOUT_MS = 10000;
 const RECORD_QUERY_ATTEMPTS = 2;
-const INITIAL_DATA_WAIT_MS = 8000;
+const INITIAL_DATA_WAIT_MS = 2000;
 const INITIAL_RECORDS_CACHE_KEY = 'snat_records_light_2026_v1';
 const INITIAL_RECORDS_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
 const loadedRecordYears = new Set();
@@ -2807,6 +2809,8 @@ function restoreInitialRecordsCache(){
     controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
     producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
     records = loaded.filter(row=>yearFromRecord(row)===String(OPERATIONAL_YEAR) && !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
+    linkedRecordIndex = null;
+    operationalControleFichasCache = null;
     historicalRecordsCache.set(String(OPERATIONAL_YEAR), records.slice());
     loadedRecordYears.add(String(OPERATIONAL_YEAR));
     return records.length > 0 || controleFichas.length > 0 || producaoMensal.length > 0;
@@ -2836,6 +2840,8 @@ async function loadRecords(year=OPERATIONAL_YEAR, initial=false){
     const cached = historicalRecordsCache.get(String(year));
     const knownIds = new Set(records.map(row=>row.id));
     records.push(...cached.filter(row=>!knownIds.has(row.id)));
+    linkedRecordIndex = null;
+    operationalControleFichasCache = null;
     loadedRecordYears.add(String(year));
     return;
   }
@@ -2860,6 +2866,8 @@ async function loadRecords(year=OPERATIONAL_YEAR, initial=false){
       const knownIds = new Set(records.map(row=>row.id));
       records.push(...loadedRecords.filter(row=>!knownIds.has(row.id)));
     }
+    linkedRecordIndex = null;
+    operationalControleFichasCache = null;
     loadedRecordYears.add(String(year));
   }catch(e){
     console.error('Falha ao carregar registros do Supabase', e);
@@ -3130,7 +3138,14 @@ function controleFichaStorageId(item){ return item.storageId || `cf-${item.id}`;
 function findLinkedRecord(numero){
   const key = normalizeControleFicha(numero);
   if(!key) return null;
-  return records.find(r => normalizeControleFicha(r.fichaNumero) === key) || null;
+  if(!linkedRecordIndex){
+    linkedRecordIndex = new Map();
+    records.forEach(record=>{
+      const recordKey = normalizeControleFicha(record.fichaNumero);
+      if(recordKey && !linkedRecordIndex.has(recordKey)) linkedRecordIndex.set(recordKey, record);
+    });
+  }
+  return linkedRecordIndex.get(key) || null;
 }
 function controleFichaStatusDate(item){
   if(!item) return '';
@@ -3209,17 +3224,34 @@ function controleFichaYear(item){
   return '';
 }
 function operationalControleFichas(){
-  return controleFichas.filter(item => controleFichaYear(item) === String(OPERATIONAL_YEAR));
+  if(operationalControleFichasCache) return operationalControleFichasCache.list;
+  const list = controleFichas.filter(item => controleFichaYear(item) === String(OPERATIONAL_YEAR));
+  const byNumero = new Map();
+  const byName = new Map();
+  list.forEach(item=>{
+    const numero = normalizeControleFicha(item.numeroFicha);
+    if(numero && !byNumero.has(numero)) byNumero.set(numero, item);
+    const name = normalizeDuplicateText(controleFichaPatientName(item));
+    if(name){
+      const matches = byName.get(name) || [];
+      matches.push(item);
+      byName.set(name, matches);
+    }
+  });
+  operationalControleFichasCache = {list, byNumero, byName};
+  return list;
 }
 function findControleFichaByNumero(numero){
   const key = normalizeControleFicha(numero);
   if(!key) return null;
-  return operationalControleFichas().find(item => normalizeControleFicha(item.numeroFicha) === key) || null;
+  if(!operationalControleFichasCache) operationalControleFichas();
+  return operationalControleFichasCache.byNumero.get(key) || null;
 }
 function findControleFichasByName(nome){
   const key = normalizeDuplicateText(nome);
   if(!key) return [];
-  return operationalControleFichas().filter(item => normalizeDuplicateText(controleFichaPatientName(item)) === key);
+  if(!operationalControleFichasCache) operationalControleFichas();
+  return operationalControleFichasCache.byName.get(key) || [];
 }
 function recordIsFinalizedByEpidemiology(r){
   const control = findControleFichaByNumero(r?.fichaNumero);
@@ -3395,6 +3427,7 @@ async function submitControleDistribuicao(event){
     if(await upsertControleFichaRemote(next)){
       if(isNew) controleFichas.push(next);
       else controleFichas = controleFichas.map(item => item.id === current.id ? next : item);
+      operationalControleFichasCache = null;
       saved.push(numero);
     } else failed.push(numero);
   }
@@ -3501,7 +3534,7 @@ function openControleModal(mode,id=''){
       if(target === 'com_enfermeiro') next.dataAtribuicaoEnfermeiro = next.dataStatusAtual;
       if(target === 'devolvida') next.dataDevolucaoEpidemio = next.dataStatusAtual;
       next.historico = [...(item.historico||[]), {statusAnterior:item.status||null,statusNovo:target,enfermeiroAnterior:item.enfermeiroResponsavel||null,enfermeiroNovo:next.enfermeiroResponsavel||null,dataMudanca:new Date().toISOString(),observacoes:next.observacoes||''}];
-      if(await upsertControleFichaRemote(next)){ controleFichas = controleFichas.map(x=>x.id===item.id?next:x); closeControleModal(); render(); showToast('Status atualizado.'); }
+      if(await upsertControleFichaRemote(next)){ controleFichas = controleFichas.map(x=>x.id===item.id?next:x); operationalControleFichasCache = null; closeControleModal(); render(); showToast('Status atualizado.'); }
       else showToast('Não foi possível salvar o status.');
       return;
     }
@@ -3522,7 +3555,7 @@ function openControleModal(mode,id=''){
       historico:[],
       createdAt:new Date().toISOString(),
     } : {...item, numeroFicha:numero || 'S/N', dataRecebimentoEpidemio:String(data.get('dataRecebimento')||item.dataRecebimentoEpidemio||todayISO()), observacoes:String(data.get('observacoes')||'').trim()};
-    if(await upsertControleFichaRemote(next)){ if(isNew) controleFichas.push(next); else controleFichas = controleFichas.map(x=>x.id===item.id?next:x); closeControleModal(); render(); showToast(isNew?'Entrada registrada.':'Entrada corrigida.'); }
+    if(await upsertControleFichaRemote(next)){ if(isNew) controleFichas.push(next); else controleFichas = controleFichas.map(x=>x.id===item.id?next:x); operationalControleFichasCache = null; closeControleModal(); render(); showToast(isNew?'Entrada registrada.':'Entrada corrigida.'); }
     else showToast('Não foi possível salvar a entrada.');
   });
 }
@@ -3670,6 +3703,8 @@ async function handleLogout(){
   await supabaseClient.auth.signOut();
   currentUser = null;
   records = [];
+  linkedRecordIndex = null;
+  operationalControleFichasCache = null;
   document.getElementById('appRoot').innerHTML = renderLogin();
   bindLoginEvents();
 }
@@ -3826,10 +3861,14 @@ async function ensureHistoricalYearLoaded(year){
   }
 }
 
-async function goTo(v, id){
+function goTo(v, id){
   if(v==='analytics2025' || v==='analytics2024'){
     const year = v.slice(-4);
-    if(!await ensureHistoricalYearLoaded(year)) return;
+    if(!loadedRecordYears.has(year)){
+      ensureHistoricalYearLoaded(year).then(loaded=>{
+        if(loaded && view === v) render();
+      });
+    }
   }
   view = v;
   if(v==='producaoDepartamento') producaoView = 'departamento';
@@ -5000,13 +5039,15 @@ async function confirmDelete(){
   const idToDelete = pendingDeleteId;
   const backup = records.find(r=>r.id===idToDelete);
   records = records.filter(r=>r.id!==idToDelete);
+  linkedRecordIndex = null;
+  operationalControleFichasCache = null;
   pendingDeleteId=null;
   render();
   const ok = await deleteRecordRemote(idToDelete);
   if(ok){
     showToast('Registro excluído.');
   } else {
-    if(backup) records.push(backup);
+    if(backup){ records.push(backup); linkedRecordIndex = null; operationalControleFichasCache = null; }
     render();
     showToast('Erro: não foi possível excluir no banco de dados. Verifique a conexão e tente novamente.');
   }
@@ -5016,12 +5057,16 @@ async function duplicateRecord(id){
   if(!orig) return;
   const copy = {...orig, id: uid(), fichaNumero: '', patientName: orig.patientName + ' (cópia)', createdAt: new Date().toISOString(), pdfFicha: null};
   records.push(copy);
+  linkedRecordIndex = null;
+  operationalControleFichasCache = null;
   render();
   const ok = await upsertRecordRemote(copy);
   if(ok){
     showToast('Registro duplicado. Informe o novo Nº da Ficha.');
   } else {
     records = records.filter(r=>r.id!==copy.id);
+    linkedRecordIndex = null;
+    operationalControleFichasCache = null;
     render();
     showToast('Erro: não foi possível duplicar no banco de dados. Verifique a conexão e tente novamente.');
   }
@@ -6987,6 +7032,8 @@ async function saveRecord(){
     }
     if(idx>=0) records[idx] = formData;
     else records.push(formData);
+    linkedRecordIndex = null;
+    operationalControleFichasCache = null;
     const ok = await upsertRecordRemote(formData);
     if(!ok) throw new Error('O registro não foi aceito pelo banco de dados.');
     clearPdfPreview();
@@ -6996,6 +7043,8 @@ async function saveRecord(){
   }catch(error){
     if(idx>=0 && previousRecord) records[idx] = previousRecord;
     else records = records.filter(r=>r.id!==formData.id);
+    linkedRecordIndex = null;
+    operationalControleFichasCache = null;
     pdfAttachmentState.loading = false;
     if(btn){ btn.disabled = false; btn.textContent = 'Salvar Registro'; }
     console.error('Falha ao salvar registro e PDF', error);
