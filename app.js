@@ -4956,7 +4956,6 @@ function renderConsulta(){
               <button class="btn-icon" title="Editar" onclick="goTo('form','${r.id}')">${iconEdit()}</button>
               <button class="btn-icon" title="Duplicar" onclick="duplicateRecord('${r.id}')">${iconCopy()}</button>
               <button class="btn-icon" title="Imprimir" onclick="printRecord('${r.id}')">${iconPrint()}</button>
-              ${r.pdfFicha ? `<button class="btn-icon pdf-action" title="Abrir PDF da ficha" onclick="openPdfForRecord('${esc(r.id)}')">PDF</button>` : ''}
               <button class="btn-icon" title="Excluir" onclick="askDelete('${r.id}')">${iconTrash()}</button>
             </div></td>
           </tr>`;
@@ -5379,8 +5378,6 @@ function renderPdfUpload(){
       <button type="button" class="btn btn-ghost btn-sm pdf-view-btn" onclick="previewCurrentPdf()" ${canPreview?'':'disabled'}>${pdfPreviewState.open?'Fechar visualização':'Visualizar ficha'}</button>
     </div>
     <span class="hint ${pdfAttachmentState.error?'pdf-error':''}" id="pdfFichaStatus">${esc(status)}</span>
-    <div id="pdfPreviewPanelHost">${renderPdfPreviewPanel()}</div>
-    ${attachment ? `<div class="pdf-existing no-print"><span>Arquivo já vinculado a esta ficha.</span><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(formData.id)}')">Abrir PDF salvo</button></div>` : ''}
     ${renderPdfAutoSummary()}
   </div>`;
 }
@@ -6145,24 +6142,33 @@ function renderPdfPreviewPanel(){
   const isImage = /^image\//i.test(pdfPreviewState.kind || '');
   const content = isImage
     ? `<img class="pdf-preview-image" src="${esc(pdfPreviewState.url)}" alt="Visualização da ficha ${esc(pdfPreviewState.name || '')}">`
-    : `<iframe class="pdf-preview-frame" src="${esc(pdfPreviewState.url)}" title="Visualização da ficha" loading="lazy"></iframe>`;
+    : `<iframe class="pdf-preview-frame" src="${esc(pdfPreviewState.url)}" title="Visualização da ficha" loading="eager"></iframe>`;
   return `<div class="pdf-preview-panel" id="pdfPreviewPanel">
-    <div class="pdf-preview-header"><strong>Visualização da ficha</strong><span>${esc(pdfPreviewState.name || 'Arquivo anexado')}</span></div>
+    <div class="pdf-preview-header"><strong>Visualização da ficha</strong><span>${esc(pdfPreviewState.name || 'Arquivo anexado')}</span><button type="button" class="btn btn-ghost btn-sm pdf-preview-close" onclick="closePdfPreview()">Fechar</button></div>
     ${content}
   </div>`;
 }
 function refreshPdfPreviewPanel(){
   const host = document.getElementById('pdfPreviewPanelHost');
-  if(host) host.innerHTML = renderPdfPreviewPanel();
+  if(host?.isConnected) host.innerHTML = renderPdfPreviewPanel();
   const button = document.querySelector('.pdf-view-btn');
   if(button){
     button.disabled = !(pdfAttachmentState.file || pdfAttachmentState.attachment);
     button.textContent = pdfPreviewState.open ? 'Fechar visualização' : 'Visualizar ficha';
   }
+  setPdfPreviewLayout(pdfPreviewState.open);
+}
+function setPdfPreviewLayout(collapsed){
+  const app = document.querySelector('.app');
+  if(app) app.classList.toggle('pdf-preview-sidebar-collapsed', Boolean(collapsed));
+}
+function waitForPdfDomPaint(){
+  return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 }
 function clearPdfPreview(){
   if(pdfPreviewState.revoke && pdfPreviewState.url) URL.revokeObjectURL(pdfPreviewState.url);
   pdfPreviewState = {open:false, url:'', revoke:false, kind:'application/pdf', name:''};
+  setPdfPreviewLayout(false);
 }
 function closePdfPreview(){
   clearPdfPreview();
@@ -6180,9 +6186,17 @@ async function previewCurrentPdf(){
     kind = pdfAttachmentState.file.type || 'application/pdf';
     name = pdfAttachmentState.file.name || 'ficha.pdf';
   }else if(pdfAttachmentState.attachment){
-    url = await getPdfAttachmentUrl(pdfAttachmentState.attachment);
-    kind = pdfAttachmentState.attachment.contentType || 'application/pdf';
-    name = pdfAttachmentState.attachment.name || 'ficha.pdf';
+    try{
+      const attachment = await loadFullPdfAttachment(formData.id, pdfAttachmentState.attachment);
+      const browserFile = await getPdfBrowserUrl(attachment);
+      url = browserFile.url;
+      revoke = browserFile.revoke;
+      kind = attachment.contentType || 'application/pdf';
+      name = attachment.name || 'ficha.pdf';
+    }catch(error){
+      showToast(error.message || 'Não foi possível preparar o PDF para visualização.');
+      return;
+    }
   }else{
     showToast('Faça o upload de um PDF antes de visualizar a ficha.');
     return;
@@ -6190,6 +6204,13 @@ async function previewCurrentPdf(){
   if(!url){ showToast('Não foi possível abrir o arquivo anexado.'); return; }
   pdfPreviewState = {open:true, url, revoke, kind, name};
   refreshPdfPreviewPanel();
+  await waitForPdfDomPaint();
+  const panel = document.getElementById('pdfPreviewPanel');
+  if(!panel?.isConnected){
+    clearPdfPreview();
+    refreshPdfPreviewPanel();
+    showToast('Não foi possível montar o visualizador do PDF. Tente novamente.');
+  }
 }
 function sanitizeFileName(name){
   return String(name || 'ficha.pdf').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(-100) || 'ficha.pdf';
@@ -6230,7 +6251,41 @@ async function getPdfAttachmentUrl(attachment){
   }
   return attachment.url || '';
 }
+async function getPdfBrowserUrl(attachment){
+  if(attachment?.mode === 'record' && attachment.dataUrl){
+    const base64 = String(attachment.dataUrl).split(',')[1] || '';
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for(let index=0; index<binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    const blob = new Blob([bytes], {type:attachment.contentType || 'application/pdf'});
+    return {url:URL.createObjectURL(blob), revoke:true};
+  }
+  return {url:await getPdfAttachmentUrl(attachment), revoke:false};
+}
 function hasPdfSource(attachment){ return Boolean(attachment?.dataUrl || attachment?.path || attachment?.url); }
+async function loadFullPdfAttachment(recordId, attachment){
+  if(hasPdfSource(attachment)) return attachment;
+  if(!recordId) return attachment;
+  showPdfLoading();
+  try{
+    const result = await fetchPdfRecord(recordId);
+    if(result.error) throw result.error;
+    const fullRecord = result.data?.data;
+    const fullAttachment = fullRecord?.pdfFicha;
+    if(!fullAttachment || !hasPdfSource(fullAttachment)) throw new Error('O registro não contém o conteúdo do PDF anexado.');
+    cachePdfRecord(recordId, fullRecord);
+    formData = {...formData, ...fullRecord};
+    pdfAttachmentState.attachment = fullAttachment;
+    return fullAttachment;
+  }finally{
+    hidePdfLoading();
+  }
+}
+function showPdfLoading(){
+  if(document.getElementById('pdfLoadingModal')) return;
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-bg" id="pdfLoadingModal"><div class="modal pdf-loading-modal"><span class="pdf-spinner" aria-hidden="true"></span><h3>Carregando PDF</h3><p>Buscando o arquivo da ficha. O restante do sistema continua disponível.</p></div></div>');
+}
+function hidePdfLoading(){ document.getElementById('pdfLoadingModal')?.remove(); }
 function cachePdfRecord(id, data){
   if(pdfRecordCache.has(id)) pdfRecordCache.delete(id);
   pdfRecordCache.set(id, data);
@@ -6254,32 +6309,6 @@ async function fetchPdfRecord(id){
     clearTimeout(timer);
   }
 }
-async function openPdfForRecord(id){
-  let record = records.find(r=>r.id===id);
-  if(!record){ showToast('Ficha não encontrada.'); return; }
-  if(!hasPdfSource(record.pdfFicha)){
-    try{
-      const result = await fetchPdfRecord(id);
-      if(result.error) throw result.error;
-      const fullRecord = result.data?.data;
-      if(fullRecord){
-        cachePdfRecord(id, fullRecord);
-        record = {...record, ...fullRecord};
-        const index = records.findIndex(item=>item.id===id);
-        if(index >= 0) records[index] = record;
-      }
-    }catch(error){
-      console.error('Falha ao carregar o PDF sob demanda', error);
-      showToast('Não foi possível carregar o PDF agora. '+(error.message || 'Tente novamente.'));
-      return;
-    }
-  }
-  if(!record?.pdfFicha){ showToast('Esta ficha não possui PDF anexado.'); return; }
-  const url = await getPdfAttachmentUrl(record.pdfFicha);
-  if(!url){ showToast('Não foi possível abrir o PDF anexado.'); return; }
-  window.open(url, '_blank', 'noopener');
-}
-
 function checkboxGroup(opts){
   const {num, label, key, options} = opts;
   const val = Array.isArray(formData[key]) ? formData[key] : [];
@@ -6319,6 +6348,7 @@ function renderForm(){
         </div>
       </div>
     </form>
+    <div id="pdfPreviewPanelHost">${renderPdfPreviewPanel()}</div>
   `;
 }
 function switchPage(p){
@@ -6961,7 +6991,7 @@ async function saveRecord(){
     if(!ok) throw new Error('O registro não foi aceito pelo banco de dados.');
     clearPdfPreview();
     pdfAttachmentState = {file:null, attachment:formData.pdfFicha || null, loading:false, error:''};
-    showToast(formData.pdfFicha ? 'Registro e PDF salvos com sucesso. Use “Abrir PDF” na lista para confirmar o arquivo.' : 'Registro salvo com sucesso.');
+    showToast(formData.pdfFicha ? 'Registro e PDF salvos com sucesso.' : 'Registro salvo com sucesso.');
     goTo('consulta');
   }catch(error){
     if(idx>=0 && previousRecord) records[idx] = previousRecord;
@@ -7008,7 +7038,6 @@ function renderPrint(id){
       ['Investigador', r.investigadorNome],['Secretaria', r.codUnidadeSaude],['Função', r.investigadorFuncao],['Nome do Digitador', r.investigadorAssinatura],
     ])}</table>
     <div style="margin-top:12px"><b>Descrição sumária:</b><br>${esc(r.descricaoSumaria||'—')}</div>` : ''}
-    ${r.pdfFicha ? `<div class="pdf-print-link no-print"><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(r.id)}')">Abrir PDF da ficha</button><span>${esc(r.pdfFicha.name || 'ficha.pdf')}</span></div>` : ''}
   </div>`;
 }
 

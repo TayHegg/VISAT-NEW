@@ -9,6 +9,14 @@
 *{box-sizing:border-box;}
 body{margin:0;font-family:var(--font-body);background:var(--bg);color:var(--text);}
 .app{display:flex;min-height:100vh;}
+.sidebar{transition:width .22s ease;overflow:hidden;}
+.app.pdf-preview-sidebar-collapsed .sidebar{width:58px;}
+.app.pdf-preview-sidebar-collapsed .sidebar .brand,
+.app.pdf-preview-sidebar-collapsed .sidebar .nav-group-title,
+.app.pdf-preview-sidebar-collapsed .sidebar .foot{display:none;}
+.app.pdf-preview-sidebar-collapsed .sidebar .nav-item{justify-content:center;padding-left:0;padding-right:0;font-size:0;}
+.app.pdf-preview-sidebar-collapsed .sidebar .nav-item svg{width:20px;height:20px;}
+.app.pdf-preview-sidebar-collapsed .main{flex:0 0 calc(50vw - 58px);max-width:calc(50vw - 58px);}
 
 /* Sidebar */
 .sidebar{width:236px;background:var(--primary);color:#fff;flex-shrink:0;display:flex;flex-direction:column;padding:20px 0;}
@@ -141,6 +149,7 @@ tr:hover td{background:var(--surface-2);}
 @media (max-width:900px){
   .sidebar{position:fixed;left:-236px;top:0;bottom:0;z-index:50;transition:left .2s ease;}
   .sidebar.open{left:0;}
+  .app.pdf-preview-sidebar-collapsed .sidebar{left:0;width:58px;}
   .field.span2,.field.span3{grid-column:span 1;}
   .cnae-input-row{flex-direction:column;}
   .cnae-input-row .btn{width:100%;justify-content:center;}
@@ -455,14 +464,22 @@ tr:hover td{background:var(--surface-2);}
 .pdf-view-btn:disabled { opacity: .5; cursor: not-allowed; }
 .pdf-upload .hint { line-height: 1.4; }
 .pdf-preview-panel {
-  margin-top: 10px;
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 1000;
+  width: 50vw;
+  height: 100vh;
+  margin: 0;
   border: 1px solid #BFD0D7;
   border-left: 4px solid var(--primary-2, #15566D);
-  border-radius: 10px;
+  border-radius: 10px 0 0 10px;
   background: #F7FAFB;
   overflow: hidden;
   box-shadow: 0 3px 12px rgba(21,86,109,.08);
+  animation: pdfPreviewSlideIn .22s ease-out;
 }
+@keyframes pdfPreviewSlideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
 .pdf-preview-header {
   display: flex;
   align-items: center;
@@ -480,18 +497,20 @@ tr:hover td{background:var(--surface-2);}
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.pdf-preview-close{flex-shrink:0;margin-left:auto;}
 .pdf-preview-frame {
   display: block;
   width: 100%;
-  height: min(68vh, 760px);
-  min-height: 460px;
+  height: calc(100vh - 48px);
+  min-height: 0;
   border: 0;
   background: #fff;
 }
 .pdf-preview-image {
   display: block;
   width: 100%;
-  max-height: min(68vh, 760px);
+  height: calc(100vh - 48px);
+  max-height: none;
   object-fit: contain;
   background: #fff;
 }
@@ -552,29 +571,13 @@ tr:hover td{background:var(--surface-2);}
   .pdf-actions { align-items: stretch; }
   .pdf-actions .btn { flex: 1 1 160px; }
   .pdf-preview-header { align-items: flex-start; flex-direction: column; gap: 3px; }
-  .pdf-preview-frame { height: 62vh; min-height: 360px; }
+  .pdf-preview-panel { width: 100vw; border-radius: 0; }
+  .pdf-preview-frame { height: calc(100vh - 70px); min-height: 360px; }
 }
 .pdf-error {
   color: var(--red, #b64646) !important;
   font-weight: 600;
 }
-.pdf-existing,
-.pdf-print-link {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.pdf-action {
-  min-width: 30px;
-  color: var(--primary);
-  font-size: 10px;
-  font-weight: 700;
-}
-
 /* Dashboard Analítico — ocupações por agravo e mapa corporal */
 .chart-panel.wide-occupations{grid-column:1 / -1;}
 .occupation-bands{display:flex;flex-direction:column;gap:12px;}
