@@ -2725,9 +2725,6 @@ const loadingRecordYears = new Map();
 const historicalRecordsCache = new Map();
 try{
   supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-  // whatsapp.js é carregado como script clássico e reutiliza o cliente autenticado.
-  window.supabaseClient = supabaseClient;
-  window.__visatSupabaseClient = supabaseClient;
 }catch(e){
   console.error('Falha ao inicializar cliente Supabase (biblioteca não carregou):', e);
 }
@@ -4047,9 +4044,6 @@ function render(){
     applyPdfFieldVisuals();
     refreshDuplicateValidation();
     if (typeof initVoiceDictation === 'function') initVoiceDictation();
-    if (typeof prepararHistoricoWhatsApp === 'function') prepararHistoricoWhatsApp();
-  } else if (typeof encerrarAssinaturasWhatsApp === 'function') {
-    encerrarAssinaturasWhatsApp();
   }
   if(view==='consulta') bindConsultaEvents();
   if(view==='controleFichas') bindControleFichasEvents();
@@ -6923,47 +6917,7 @@ function renderForm(){
       </div>
     </form>
     <div id="pdfPreviewPanelHost">${renderPdfPreviewPanel()}</div>
-    ${renderWhatsAppPanel()}
   `;
-}
-function renderWhatsAppPanel(){
-  const persisted = Boolean(editingId && formData?.id && records.some(record=>record.id===formData.id));
-  if(!persisted) return '';
-  const telefone = String(formData.resTelefone || '').trim();
-  const dataNotificacao = String(formData.dataNotificacao || '').trim();
-  const canSend = Boolean(telefone && dataNotificacao && formData.patientName);
-  return `<div class="panel whatsapp-panel">
-    <div class="whatsapp-panel-heading">
-      <div>
-        <h2>Contato com o paciente por WhatsApp</h2>
-        <div class="hint">O envio usa o telefone de residência da ficha (<b>resTelefone</b>). Respostas recebidas ficam vinculadas a este registro.</div>
-      </div>
-      <button type="button" class="btn btn-primary btn-sm" onclick="enviarWhatsAppDaFicha()" ${canSend?'':'disabled'}>Enviar mensagem</button>
-    </div>
-    <div class="whatsapp-panel-meta">
-      <span class="badge ${telefone?'green':'amber'}">Telefone: ${esc(telefone || 'não informado')}</span>
-      ${!canSend ? '<span class="hint">Preencha nome, telefone e data da notificação para habilitar o envio.</span>' : ''}
-    </div>
-    <div class="whatsapp-history" data-whatsapp-history data-ficha-id="${esc(formData.id)}">Carregando histórico…</div>
-  </div>`;
-}
-async function enviarWhatsAppDaFicha(){
-  syncFormFromDOM();
-  if(!editingId || !records.some(record=>record.id===formData.id)){
-    showToast('Salve a ficha antes de enviar uma mensagem.');
-    return false;
-  }
-  if(typeof window.enviarWhatsApp !== 'function'){
-    showToast('A integração do WhatsApp ainda não foi carregada.');
-    return false;
-  }
-  return window.enviarWhatsApp({
-    fichaId: formData.id,
-    numero: formData.fichaNumero,
-    nome: formData.patientName,
-    telefone: formData.resTelefone,
-    dataNotificacao: fmtDate(formData.dataNotificacao),
-  });
 }
 function switchPage(p){
   syncFormFromDOM();
