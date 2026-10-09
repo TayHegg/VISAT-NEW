@@ -2625,6 +2625,9 @@ const INVESTIGADOR_FUNCAO_FIXA = 'Enfermeiro';
 const INVESTIGADOR_OPTIONS = [['Julio Cesar','Julio Cesar'],['Luciane Manhães','Luciane Manhães']];
 const PDF_BUCKET = 'visat-fichas-pdf';
 const PDF_MAX_BYTES = 8 * 1024 * 1024;
+const BATCH_PDF_CHUNK_SIZE = 15;
+const BATCH_PDF_PAUSE_MS = 300;
+let batchImportState = {items:[], processing:false, progress:0};
 
 // Mapeamento das partes do corpo oficiais do SINAN para as regiões consolidadas do mapa corporal
 const BODY_REGIONS = [
@@ -2659,6 +2662,7 @@ let formData = {};
 let pdfAttachmentState = {file:null, attachment:null, loading:false, error:''};
 let pdfPreviewState = {open:false, url:'', revoke:false, kind:'application/pdf', name:''};
 let pdfAutoState = {active:false, processing:false, filled:[], unresolved:[], warnings:[], text:''};
+let batchPdfState = {processing:false, current:0, total:0, success:[], errors:[], skipped:[], message:''};
 let tableState = { search:'', quickFicha:'', quickPatient:'', sortKey:'fichaNumero', sortDir:1, filterAgravo:'', filterStatus:'', filterSituacao:'', page:1, pageSize:10 };
 let dashFilters = { ano:'2026', periodoIni:'', periodoFim:'', mes:'', agravo:'', unidade:'', municipio:'', bairro:'', ocupacao:'', sexo:'', racaCor:'', escolaridade:'', tipoAcidente:'', status:'', obito:'' };
 let bmSelectedRegion = null;
@@ -2666,21 +2670,22 @@ let pendingDeleteId = null;
 let dashboardCardFilter = '';
 let digitacaoDrawerOpen = false;
 let analyticsCardFilter = null;
-let analyticsDrawerOpen = false;
 
 let controleFichas = [];
-let linkedRecordIndex = null;
-let operationalControleFichasCache = null;
 let controleTab = 'todas';
 let controleBuscaNumero = '';
 let controleBuscaNome = '';
-let controleConsultaDrawerOpen = false;
+let controleBuscaNumeroConfirmada = '';
+let controleBuscaNomeConfirmada = '';
+let controleConsultaDetalheAberta = false;
 let producaoMensal = [];
 let producaoView = 'departamento';
 let producaoMesFiltro = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
 let producaoFormOwner = '';
 let producaoPessoasExtras = [];
 let producaoPessoaSelecionada = '';
+let producaoFormDraft = null;
+let producaoAtividadesDraft = [];
 
 const PRODUCAO_RESPONSAVEIS = ['Julio Cesar','Luciane Manhães'];
 const PRODUCAO_SIA_SUS_CODES = [
@@ -2706,6 +2711,7 @@ const PRODUCAO_SIA_SUS_CODES = [
   ['01.02.02.001-9','Vigilância da situação de saúde dos trabalhadores'],
   ['01.02.02.002-7','Atividade de educação em saúde do trabalhador'],
   ['01.02.02.003-5','Inspeção sanitária em saúde do trabalhador'],
+  ['01.02.03.001-4','Aplicação de Vacinas'],
 ];
 
 /* ============================= SUPABASE ============================= */
@@ -2713,179 +2719,130 @@ const SUPABASE_URL = 'https://rjcjvxxmfvasymcncrge.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_OqhyfChr2RxPl3xfxAPyuQ_sge3PV7j';
 let supabaseClient = null;
 const pdfRecordCache = new Map();
-const PDF_FETCH_TIMEOUT_MS = 10000;
-const RECORDS_PAGE_SIZE = 1000;
-const RECORD_QUERY_TIMEOUT_MS = 10000;
-const RECORD_QUERY_ATTEMPTS = 2;
-const INITIAL_DATA_WAIT_MS = 2000;
-const INITIAL_RECORDS_CACHE_KEY = 'snat_records_light_2026_v1';
-const INITIAL_RECORDS_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
+const PDF_FETCH_TIMEOUT_MS = 15000;
 const loadedRecordYears = new Set();
 const loadingRecordYears = new Map();
 const historicalRecordsCache = new Map();
-let recordsLoading = false;
 try{
   supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  // whatsapp.js é carregado como script clássico e reutiliza o cliente autenticado.
   window.supabaseClient = supabaseClient;
   window.__visatSupabaseClient = supabaseClient;
 }catch(e){
   console.error('Falha ao inicializar cliente Supabase (biblioteca não carregou):', e);
 }
 
+const RECORDS_PAGE_SIZE = 500;
+
 function applyRecordsCursor(query, cursor){
   if(!cursor?.updatedAt) return query;
+  // updated_at é o cursor principal; id desempata registros gravados no mesmo instante.
+  // Os IDs gerados pelo sistema são strings simples, portanto podem ser usados no
+  // filtro OR do PostgREST sem alterar nem copiar os dados da tabela.
   if(!cursor.id) return query.gt('updated_at', cursor.updatedAt);
   return query.or(`updated_at.gt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.gt.${cursor.id})`);
 }
 
-function applyRecordYearFilter(query, year){
-  const value = String(year || '');
-  if(!/^\d{4}$/.test(value)) return query;
-  const nextYear = String(Number(value) + 1);
-  return query.or(`data->>anoReferencia.eq.${value},id.like.excel${value}-*,and(data->>dataNotificacao.gte.${value}-01-01,data->>dataNotificacao.lt.${nextYear}-01-01)`);
-}
-
-async function loadRecordsFromSource(source, year=''){
-  const allRows = [];
-  let cursor = null;
-  for(;;){
-    let result = null;
-    let lastError = null;
-    for(let attempt=1; attempt<=RECORD_QUERY_ATTEMPTS; attempt++){
-      let controller = null;
-      let timeoutId = null;
-      try{
-        let query = supabaseClient
-          .from(source)
-          .select(source === 'records_light_cache' ? 'id,data,updated_at' : 'data')
-          .order('updated_at', { ascending: true });
-        query = applyRecordYearFilter(query, year);
-        if(source === 'records_light_cache'){
-          query = query.order('id', { ascending: true }).limit(RECORDS_PAGE_SIZE);
-          query = applyRecordsCursor(query, cursor);
-        }else{
-          query = query.range(allRows.length, allRows.length + RECORDS_PAGE_SIZE - 1);
-        }
-        controller = new AbortController();
-        if(typeof query.abortSignal === 'function') query = query.abortSignal(controller.signal);
-        result = await Promise.race([
-          query,
-          new Promise((_, reject)=>{
-            timeoutId = setTimeout(()=>{
-              controller.abort();
-              reject(new Error(`A consulta de ${source} excedeu ${RECORD_QUERY_TIMEOUT_MS/1000}s.`));
-            }, RECORD_QUERY_TIMEOUT_MS);
-          })
-        ]);
-        if(!result.error) break;
-        lastError = result.error;
-      }catch(error){ lastError = error; }
-      finally{
-        if(timeoutId) clearTimeout(timeoutId);
-      }
-      if(attempt < RECORD_QUERY_ATTEMPTS) await new Promise(resolve=>setTimeout(resolve, 250 * attempt));
-    }
-    if(!result || result.error) throw lastError || result?.error || new Error(`Não foi possível ler ${source}.`);
-    const page = result.data || [];
-    allRows.push(...page);
-    if(page.length < RECORDS_PAGE_SIZE) break;
-    if(source === 'records_light_cache'){
-      const lastRow = page[page.length - 1];
-      const nextCursor = {updatedAt:lastRow?.updated_at, id:lastRow?.id};
-      if(!nextCursor.updatedAt || (cursor && nextCursor.updatedAt === cursor.updatedAt && nextCursor.id === cursor.id)){
-        throw new Error('A paginação dos registros leves não avançou.');
-      }
-      cursor = nextCursor;
-    }
-  }
-  return allRows;
-}
-
-function restoreInitialRecordsCache(){
-  try{
-    const cached = JSON.parse(localStorage.getItem(INITIAL_RECORDS_CACHE_KEY) || 'null');
-    if(!cached || !Array.isArray(cached.rows) || Date.now() - Number(cached.savedAt || 0) > INITIAL_RECORDS_CACHE_MAX_AGE_MS) return false;
-    const loaded = cached.rows.map(stripPdfContentFromLightRecord).filter(Boolean);
-    controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
-    producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
-    records = loaded.filter(row=>yearFromRecord(row)===String(OPERATIONAL_YEAR) && !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
-    linkedRecordIndex = null;
-    operationalControleFichasCache = null;
-    historicalRecordsCache.set(String(OPERATIONAL_YEAR), records.slice());
-    loadedRecordYears.add(String(OPERATIONAL_YEAR));
-    return records.length > 0 || controleFichas.length > 0 || producaoMensal.length > 0;
-  }catch(error){
-    console.warn('Cache local do Dashboard indisponível.', error);
-    return false;
-  }
-}
-
-function saveInitialRecordsCache(loaded){
-  try{
-    localStorage.setItem(INITIAL_RECORDS_CACHE_KEY, JSON.stringify({savedAt:Date.now(), rows:loaded}));
-  }catch(error){
-    console.warn('Não foi possível atualizar o cache local do Dashboard.', error);
-  }
-}
-
-function stripPdfContentFromLightRecord(record){
-  if(!record?.pdfFicha || typeof record.pdfFicha !== 'object') return record;
-  const attachment = {...record.pdfFicha};
-  ['dataUrl','base64','content','blob','payload'].forEach(key=>delete attachment[key]);
-  return {...record, pdfFicha:attachment};
-}
-
 async function loadRecords(year=OPERATIONAL_YEAR, initial=false){
   if(!initial && historicalRecordsCache.has(String(year))){
-    const cached = historicalRecordsCache.get(String(year));
-    const knownIds = new Set(records.map(row=>row.id));
+    const cached=historicalRecordsCache.get(String(year));
+    const knownIds=new Set(records.map(row=>row.id));
     records.push(...cached.filter(row=>!knownIds.has(row.id)));
-    linkedRecordIndex = null;
-    operationalControleFichasCache = null;
     loadedRecordYears.add(String(year));
     return;
   }
   try{
-    let allRows;
-    try{
-      allRows = await loadRecordsFromSource('records_light_cache', year);
-    }catch(lightError){
-      console.warn('Cache leve indisponível; usando a tabela principal como fallback.', lightError);
-      allRows = await loadRecordsFromSource('records', year);
+    const allRows = [];
+    let cursor = null;
+    for(;;){
+      let result = null;
+      let lastError = null;
+      for(let attempt=1; attempt<=3; attempt++){
+        try{
+          let query = supabaseClient
+            .from('records_light_cache')
+            .select('id,data,updated_at')
+            .order('updated_at', { ascending: true })
+            .order('id', { ascending: true })
+            .limit(RECORDS_PAGE_SIZE);
+          query = applyRecordsCursor(query, cursor);
+          result = await query;
+          if(!result.error) break;
+          lastError = result.error;
+        }catch(error){ lastError = error; }
+        await new Promise(resolve=>setTimeout(resolve, 400 * attempt));
+      }
+      if(!result || result.error) throw lastError || new Error('A consulta dos registros não retornou dados.');
+      const { data } = result;
+      const page = data || [];
+      allRows.push(...page);
+      if(page.length < RECORDS_PAGE_SIZE) break;
+
+      const lastRow = page[page.length - 1];
+      const nextCursor = { updatedAt: lastRow?.updated_at, id: lastRow?.id };
+      if(!nextCursor.updatedAt) throw new Error('A consulta dos registros retornou uma linha sem updated_at.');
+      if(cursor && nextCursor.updatedAt === cursor.updatedAt && nextCursor.id === cursor.id){
+        throw new Error('A paginação dos registros não avançou para o próximo cursor.');
+      }
+      cursor = nextCursor;
     }
-    const loaded = allRows.map(row => stripPdfContentFromLightRecord(row.data)).filter(Boolean);
-    if(initial) saveInitialRecordsCache(loaded);
+    const loaded = allRows.map(row => row.data).filter(Boolean);
     if(initial){
-      controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
+      controleFichas = dedupeControleFichas(loaded.filter(isControleFichaRecord).filter(isOperationalControleFicha).map(normalizeControleFichaRecord));
       producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
+      const latestProductionMonth = producaoLatestMonth(producaoMensal);
+      if(latestProductionMonth && !producaoMensal.some(item=>producaoMonth(item.data) === producaoMonth(producaoMesFiltro))) producaoMesFiltro = latestProductionMonth;
     }
-    const loadedRecords = loaded.filter(row=>yearFromRecord(row)===String(year) && !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
-    historicalRecordsCache.set(String(year), loadedRecords);
+    const yearLoaded = loaded.filter(row=>yearFromRecord(row)===String(year));
+    const loadedRecords = yearLoaded.filter(row => !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
+    if(initial){
+      [OPERATIONAL_YEAR,'2024','2025'].forEach(target=>historicalRecordsCache.set(target,loaded.filter(row=>yearFromRecord(row)===target && !isControleFichaRecord(row) && !isProducaoMensalRecord(row))));
+    }
     if(initial) records = loadedRecords;
-    else{
+    else {
       const knownIds = new Set(records.map(row=>row.id));
       records.push(...loadedRecords.filter(row=>!knownIds.has(row.id)));
     }
-    linkedRecordIndex = null;
-    operationalControleFichasCache = null;
     loadedRecordYears.add(String(year));
+    if(initial){
+      // A recuperação automática é complementar e não bloqueia a primeira renderização.
+      Promise.resolve().then(()=>ensureControleOccurrenceRecords()).then(()=>render()).catch(error=>{
+        console.warn('A recuperação automática do Controle de Fichas falhou; os dados carregados foram mantidos.', error);
+      });
+    }
   }catch(e){
     console.error('Falha ao carregar registros do Supabase', e);
-    if(!records.length && !controleFichas.length && !producaoMensal.length) showToast('Não foi possível conectar ao banco de dados.');
+    // Nunca apague os dados que já estão em memória por causa de uma falha transitória.
+    if(!records.length && !controleFichas.length && !producaoMensal.length){
+      showToast('Não foi possível carregar os registros agora. Tentando novamente…');
+    }
   }
 }
 
 async function upsertRecordRemote(record){
-  try{
-    const { error } = await supabaseClient
-      .from('records')
-      .upsert({ id: record.id, data: record, updated_at: new Date().toISOString() }, { onConflict: 'id' });
-    if(error) throw error;
-    return true;
-  }catch(e){
-    console.error('Falha ao salvar no Supabase', e);
-    return false;
+  if(!supabaseClient) return false;
+  const payload = { id: record.id, data: record, updated_at: new Date().toISOString() };
+  const maxAttempts = 3;
+  const isTransient = error => {
+    const status = Number(error?.status || error?.response?.status || 0);
+    return !status || status === 408 || status === 425 || status === 429 || status >= 500;
+  };
+  for(let attempt=1; attempt<=maxAttempts; attempt++){
+    try{
+      const { error } = await supabaseClient
+        .from('records')
+        .upsert(payload, { onConflict: 'id' });
+      if(!error) return true;
+      if(!isTransient(error) || attempt === maxAttempts) throw error;
+    }catch(e){
+      if(!isTransient(e) || attempt === maxAttempts){
+        console.error('Falha ao salvar no Supabase', e);
+        return false;
+      }
+    }
+    await new Promise(resolve=>setTimeout(resolve, 350 * attempt));
   }
+  return false;
 }
 
 async function deleteRecordRemote(id){
@@ -2897,6 +2854,31 @@ async function deleteRecordRemote(id){
     console.error('Falha ao excluir no Supabase', e);
     return false;
   }
+}
+async function upsertRecordsRemoteBatch(recordsToSave, options={}){
+  if(!supabaseClient || !recordsToSave.length) return {saved:[], failed:recordsToSave.map(record=>({record,error:new Error('Banco de dados indisponível.')}))};
+  const maxAttempts = options.maxAttempts || 3;
+  const payload = recordsToSave.map(record=>({id:record.id, data:record, updated_at:new Date().toISOString()}));
+  const isTransient = error => {
+    const status = Number(error?.status || error?.response?.status || 0);
+    return !status || status === 408 || status === 425 || status === 429 || status >= 500;
+  };
+  for(let attempt=1; attempt<=maxAttempts; attempt++){
+    try{
+      const {error} = await supabaseClient.from('records').upsert(payload, {onConflict:'id'});
+      if(!error) return {saved:recordsToSave, failed:[]};
+      if(!isTransient(error) || attempt===maxAttempts) break;
+    }catch(error){
+      if(!isTransient(error) || attempt===maxAttempts) break;
+    }
+    await new Promise(resolve=>setTimeout(resolve,350*attempt));
+  }
+  const saved=[]; const failed=[];
+  for(const record of recordsToSave){
+    if(await upsertRecordRemote(record)) saved.push(record);
+    else failed.push({record,error:new Error(`Falha ao salvar o registro ${record.id}`)});
+  }
+  return {saved, failed};
 }
 async function upsertProducaoRemote(item){
   try{
@@ -2922,6 +2904,9 @@ async function deleteProducaoRemote(item){
 
 /* ============================= PRODUÇÃO MENSAL ============================= */
 function producaoMonth(value){ return String(value || '').slice(0,7); }
+function producaoLatestMonth(items){
+  return [...new Set((items || []).map(item=>producaoMonth(item?.data)).filter(Boolean))].sort().pop() || '';
+}
 function producaoCodes(item){
   const raw = Array.isArray(item?.codigoSiaSus) ? item.codigoSiaSus : String(item?.codigoSiaSus || '').split(/[,;\n]+/);
   return raw.map(code=>String(code).trim()).filter(Boolean);
@@ -2950,6 +2935,8 @@ function producaoSummaryByCode(items){
 }
 function openProducaoForm(owner=''){
   producaoFormOwner = owner || '';
+  producaoFormDraft = null;
+  producaoAtividadesDraft = [];
   goTo('producaoNova');
 }
 function setProducaoMesFiltro(value){
@@ -2973,28 +2960,79 @@ function adicionarPessoaProducao(){
   producaoFormOwner = clean;
   openProducaoForm(clean);
 }
+function captureProducaoDraft(){
+  const form = document.getElementById('producaoForm');
+  if(!form) return;
+  const data = new FormData(form);
+  const count = Number(form.dataset.activityCount || producaoAtividadesDraft.length || 1);
+  const atividades = Array.from({length:count}, (_,index)=>({
+    processoEmpresaContribuinte:String(data.get(`processoEmpresaContribuinte_${index}`) || '').trim(),
+    enderecoMeioComunicacao:String(data.get(`enderecoMeioComunicacao_${index}`) || '').trim(),
+    atividade:String(data.get(`atividade_${index}`) || '').trim(),
+    codigoSiaSus:String(data.get(`codigoSiaSus_${index}`) || '').trim(),
+    pessoasAlcancadas:Math.max(1, Number(data.get(`pessoasAlcancadas_${index}`)) || 1),
+    autosSituacao:String(data.get(`autosSituacao_${index}`) || '').trim(),
+    ordemFiscalizacao:String(data.get(`ordemFiscalizacao_${index}`) || '').trim(),
+    areaAtuacao:String(data.get(`areaAtuacao_${index}`) || '').trim(),
+    chefia:String(data.get(`chefia_${index}`) || '').trim(),
+  }));
+  producaoAtividadesDraft = atividades;
+  producaoFormDraft = {
+    data:String(data.get('data') || todayISO()),
+    responsavel:String(data.get('responsavel') || '').trim(),
+    tipoServico:String(data.get('tipoServico') || '').trim(),
+    quantidade:1,
+    atividades,
+  };
+}
+function addProducaoAtividade(){
+  captureProducaoDraft();
+  if(!producaoFormDraft) return;
+  producaoFormDraft.atividades.push({processoEmpresaContribuinte:'',enderecoMeioComunicacao:'',atividade:'',codigoSiaSus:'',pessoasAlcancadas:1,autosSituacao:'',ordemFiscalizacao:'',areaAtuacao:'',chefia:''});
+  producaoAtividadesDraft = producaoFormDraft.atividades;
+  render();
+}
+function removeProducaoAtividade(index){
+  captureProducaoDraft();
+  if(!producaoFormDraft || producaoFormDraft.atividades.length <= 1) return;
+  producaoFormDraft.atividades.splice(index,1);
+  producaoAtividadesDraft = producaoFormDraft.atividades;
+  render();
+}
 function renderProducaoForm(){
-  const today = todayISO();
-  const ownerOptions = producaoPeopleList().map(owner=>`<option value="${esc(owner)}" ${owner===producaoFormOwner?'selected':''}>${esc(owner)}</option>`).join('');
+  const draft = producaoFormDraft || {data:todayISO(),responsavel:producaoFormOwner || '',tipoServico:'',quantidade:1,atividades:producaoAtividadesDraft.length ? producaoAtividadesDraft : [{processoEmpresaContribuinte:'',enderecoMeioComunicacao:'',atividade:'',codigoSiaSus:'',pessoasAlcancadas:1,autosSituacao:'',ordemFiscalizacao:'',areaAtuacao:'',chefia:''}]};
+  producaoAtividadesDraft = draft.atividades;
+  const ownerOptions = producaoPeopleList().map(owner=>`<option value="${esc(owner)}" ${owner===draft.responsavel?'selected':''}>${esc(owner)}</option>`).join('');
   const codeOptions = PRODUCAO_SIA_SUS_CODES.map(([code,description])=>`<option value="${esc(code)}">${esc(code)} — ${esc(description)}</option>`).join('');
+  const serviceOptions = ['Investigação de ficha','Fiscalização','Atividade educativa','Reunião / apoio técnico','Outro'].map(option=>`<option value="${esc(option)}" ${draft.tipoServico===option?'selected':''}>${esc(option)}</option>`).join('');
+  const activityRows = draft.atividades.map((activity,index)=>`<div class="producao-activity-card" data-activity-index="${index}">
+    <div class="producao-activity-card-head"><strong>Atividade ${index+1}</strong>${draft.atividades.length>1?`<button class="btn btn-ghost btn-sm" type="button" onclick="removeProducaoAtividade(${index})">Remover</button>`:''}</div>
+    <div class="producao-activity-grid">
+      <div class="field"><label>Processo / Empresa / Contribuinte</label><input name="processoEmpresaContribuinte_${index}" type="text" value="${esc(activity.processoEmpresaContribuinte)}" placeholder="Processo, empresa ou contribuinte" oninput="captureProducaoDraft()"></div>
+      <div class="field producao-field-wide"><label>Endereço / Meio de Comunicação</label><input name="enderecoMeioComunicacao_${index}" type="text" value="${esc(activity.enderecoMeioComunicacao)}" placeholder="Endereço, telefone, e-mail ou outro meio de comunicação" oninput="captureProducaoDraft()"></div>
+      <div class="field"><label>Atividade <span class="req">*</span></label><input name="atividade_${index}" type="text" value="${esc(activity.atividade)}" placeholder="Descreva a atividade realizada" required oninput="captureProducaoDraft()"></div>
+      <div class="field"><label>Código SIA/SUS</label><input name="codigoSiaSus_${index}" type="text" value="${esc(activity.codigoSiaSus)}" list="producaoCodigos" placeholder="Código" oninput="captureProducaoDraft()"></div>
+      <div class="field"><label>Pessoas alcançadas</label><input name="pessoasAlcancadas_${index}" type="number" min="1" step="1" value="${esc(activity.pessoasAlcancadas || activity.quantidade || 1)}" placeholder="Ex.: 99" oninput="captureProducaoDraft()"><div class="hint">Quantidade de pessoas beneficiadas.</div></div>
+      <div class="field"><label>Autos / Situação</label><input name="autosSituacao_${index}" type="text" value="${esc(activity.autosSituacao)}" placeholder="Autos ou situação" oninput="captureProducaoDraft()"></div>
+      <div class="field"><label>Ordem de Fiscalização</label><input name="ordemFiscalizacao_${index}" type="text" value="${esc(activity.ordemFiscalizacao)}" placeholder="Ordem de fiscalização" oninput="captureProducaoDraft()"></div>
+      <div class="field"><label>Área de Atuação</label><input name="areaAtuacao_${index}" type="text" value="${esc(activity.areaAtuacao)}" placeholder="Área de atuação" oninput="captureProducaoDraft()"></div>
+      <div class="field"><label>Chefias</label><input name="chefia_${index}" type="text" value="${esc(activity.chefia)}" placeholder="Chefias envolvidas" oninput="captureProducaoDraft()"></div>
+    </div>
+    <details class="producao-code-reference"><summary>Consultar códigos e significados</summary><div>${PRODUCAO_SIA_SUS_CODES.map(([code,description])=>`<div><b>${esc(code)}</b><span>${esc(description)}</span></div>`).join('')}</div></details>
+  </div>`).join('');
   return `<div class="panel producao-form-panel">
-    <div class="producao-form-header"><div><div class="eyebrow">Mapa diário de produção — VISAT</div><h2>Nova Produção</h2><p class="hint">Registre uma atividade realizada. O lançamento será somado automaticamente à produção do responsável e ao total do Departamento.</p></div><button class="btn btn-ghost" type="button" onclick="goTo('producaoDepartamento')">Voltar para produção</button></div>
-    <form id="producaoForm" onsubmit="submitProducao(event)">
-      <div class="form-section"><div class="sec-title">Identificação do lançamento</div><div class="field-grid">
-        <div class="field"><label for="producaoData">Data <span class="req">*</span></label><input id="producaoData" name="data" type="date" value="${today}" required></div>
-        <div class="field"><label for="producaoResponsavel">Responsável <span class="req">*</span></label><select id="producaoResponsavel" name="responsavel" required><option value="">Selecione</option>${ownerOptions}</select><div class="hint">Julio Cesar e Luciane Manhães registram suas próprias produções.</div></div>
-        <div class="field"><label for="producaoQuantidade">Quantidade <span class="req">*</span></label><input id="producaoQuantidade" name="quantidade" type="number" min="1" step="1" value="1" required></div>
-        <div class="field"><label for="producaoProcessoEmpresa">Processo / Empresa / Contribuinte</label><input id="producaoProcessoEmpresa" name="processoEmpresaContribuinte" type="text" placeholder="Processo, empresa ou contribuinte"></div>
+    <div class="producao-form-header"><div><div class="eyebrow">Mapa diário de produção — VISAT</div><h2>Nova Produção</h2><p class="hint">Registre atividades realizadas. Lançamentos retroativos, como os do mês de agosto, são permitidos e serão contabilizados pela data informada.</p></div><button class="btn btn-ghost" type="button" onclick="goTo('producaoDepartamento')">Voltar para produção</button></div>
+    <form id="producaoForm" data-activity-count="${draft.atividades.length}" onsubmit="submitProducao(event)">
+      <div class="form-section"><div class="sec-title">Identificação do lançamento</div><div class="producao-identification-grid">
+        <div class="field"><label for="producaoData">Data <span class="req">*</span></label><input id="producaoData" name="data" type="date" value="${esc(draft.data)}" required onchange="captureProducaoDraft()"><div class="hint">Você pode informar uma data anterior.</div></div>
+        <div class="field"><label for="producaoResponsavel">Responsável <span class="req">*</span></label><select id="producaoResponsavel" name="responsavel" required onchange="captureProducaoDraft()"><option value="">Selecione</option>${ownerOptions}</select><div class="hint">Cada responsável registra sua própria produção.</div></div>
+        <div class="field"><label for="producaoTipoServico">Tipo de serviço</label><select id="producaoTipoServico" name="tipoServico" onchange="captureProducaoDraft()"><option value="">Selecione</option>${serviceOptions}</select></div>
       </div></div>
-      <div class="form-section"><div class="sec-title">Dados da atividade e fiscalização</div><div class="field-grid">
-        <div class="field span2"><label for="producaoEnderecoComunicacao">Endereço / Meio de Comunicação</label><input id="producaoEnderecoComunicacao" name="enderecoMeioComunicacao" type="text" placeholder="Endereço, telefone, e-mail ou outro meio de comunicação"></div>
-        <div class="field span2"><label for="producaoAtividade">Atividade <span class="req">*</span></label><input id="producaoAtividade" name="atividade" type="text" placeholder="Descreva a atividade realizada" required></div>
-        <div class="field span2"><label for="producaoCodigo">Código SIA/SUS</label><input id="producaoCodigo" name="codigoSiaSus" type="text" list="producaoCodigos" placeholder="Digite ou selecione o código; se houver mais de um, separe por vírgula"><datalist id="producaoCodigos">${codeOptions}</datalist><div class="hint">Os códigos e significados estão disponíveis no mapa de produção recebido.</div><details class="producao-code-reference"><summary>Consultar códigos e significados</summary><div>${PRODUCAO_SIA_SUS_CODES.map(([code,description])=>`<div><b>${esc(code)}</b><span>${esc(description)}</span></div>`).join('')}</div></details></div>
-        <div class="field"><label for="producaoAutos">Autos / Situação</label><input id="producaoAutos" name="autosSituacao" type="text" placeholder="Autos ou situação"></div>
-        <div class="field"><label for="producaoOrdem">Ordem de Fiscalização</label><input id="producaoOrdem" name="ordemFiscalizacao" type="text" placeholder="Ordem de fiscalização"></div>
-        <div class="field"><label for="producaoAreaAtuacao">Área de Atuação</label><input id="producaoAreaAtuacao" name="areaAtuacao" type="text" placeholder="Área de atuação"></div>
-        <div class="field"><label for="producaoChefias">Chefias</label><input id="producaoChefias" name="chefia" type="text" placeholder="Chefias envolvidas"></div>
-      </div></div>
+      <div class="form-section"><div class="producao-activity-section-head"><div class="sec-title">Dados da atividade e fiscalização</div><button class="producao-add-activity" type="button" title="Adicionar nova atividade" onclick="addProducaoAtividade()">+</button></div>
+        <div class="producao-activities">${activityRows}</div>
+      </div>
+      <datalist id="producaoCodigos">${codeOptions}</datalist>
+      <input type="hidden" name="quantidade" value="1">
       <div class="form-actions producao-form-actions"><button class="btn btn-ghost" type="button" onclick="goTo('producaoDepartamento')">Cancelar</button><button class="btn btn-primary" type="submit">Salvar produção</button></div>
     </form>
   </div>`;
@@ -3016,7 +3054,7 @@ function renderProducaoMensal(owner=''){
     <div class="producao-view-tabs"><button class="producao-view-tab ${activeView==='departamento'?'active':''}" onclick="setProducaoView('departamento')">Departamento</button>${peopleTabs}<button class="producao-view-tab producao-add-tab" title="Adicionar pessoa ou área" onclick="adicionarPessoaProducao()">+</button></div>
     <div class="panel producao-filter-panel"><div class="field"><label for="producaoMesFiltro">Mês de referência</label><input id="producaoMesFiltro" type="month" value="${esc(producaoMesFiltro)}" onchange="setProducaoMesFiltro(this.value)"></div><div class="hint">A produção é contabilizada pela data do lançamento.</div></div>
     <div class="grid-stats producao-stats"><div class="stat-card primary"><div class="n">${departmentTotal}</div><div class="l">Total do Departamento</div><div class="stat-sub">Vigilância e Saúde do Trabalhador</div></div><div class="stat-card amber"><div class="n">${julioTotal}</div><div class="l">Julio Cesar</div></div><div class="stat-card green"><div class="n">${lucianeTotal}</div><div class="l">Luciane Manhães</div></div></div>
-    <div class="panel"><div class="producao-section-heading"><div><h2>${esc(scopeLabel)} — ${esc(monthLabel)}</h2><div class="hint">${items.length} lançamento(s) · ${producaoTotal(items)} unidade(s) contabilizada(s).</div></div></div>${items.length ? `<div class="table-scroll"><table class="producao-table"><thead><tr><th>Data</th><th>Responsável</th><th>Processo / Empresa / Contribuinte</th><th>Endereço / Meio de Comunicação</th><th>Atividade</th><th>Código SIA/SUS</th><th>Autos / Situação</th><th>Ordem de Fiscalização</th><th>Área de Atuação</th><th>Chefias</th><th>Qtd.</th><th>Ações</th></tr></thead><tbody>${items.map(item=>renderProducaoRow(item)).join('')}</tbody></table></div>` : `<div class="empty-state"><div style="font-size:38px;color:var(--border);margin-bottom:8px">—</div><b>Nenhuma produção lançada neste mês</b><div style="margin-top:5px">Use “Nova Produção” para registrar uma atividade.</div></div>`}</div>
+    <div class="panel"><div class="producao-section-heading"><div><h2>${esc(scopeLabel)} — ${esc(monthLabel)}</h2><div class="hint">${items.length} lançamento(s) · ${producaoTotal(items)} pessoa(s) alcançada(s).</div></div></div>${items.length ? `<div class="table-scroll"><table class="producao-table"><thead><tr><th>Data</th><th>Responsável</th><th>Processo / Empresa / Contribuinte</th><th>Endereço / Meio de Comunicação</th><th>Atividade</th><th>Código SIA/SUS</th><th>Autos / Situação</th><th>Ordem de Fiscalização</th><th>Área de Atuação</th><th>Chefias</th><th>Pessoas alcançadas</th><th>Ações</th></tr></thead><tbody>${items.map(item=>renderProducaoRow(item)).join('')}</tbody></table></div>` : `<div class="empty-state"><div style="font-size:38px;color:var(--border);margin-bottom:8px">—</div><b>Nenhuma produção lançada neste mês</b><div style="margin-top:5px">Use “Nova Produção” para registrar uma atividade.</div></div>`}</div>
     <div class="panel"><div class="producao-section-heading"><div><h2>Resumo por código SIA/SUS</h2><div class="hint">Contagem dos lançamentos da visão atual.</div></div></div>${codeSummary.length ? `<div class="producao-code-summary">${codeSummary.map(([code,total])=>`<div class="producao-code-row"><div><b>${esc(code)}</b><span>${esc(producaoDescription(code) || 'Código informado no lançamento')}</span></div><strong>${total}</strong></div>`).join('')}</div>` : `<div class="empty-state compact">Nenhum código contabilizado neste mês.</div>`}</div>
   </div>`;
 }
@@ -3036,37 +3074,56 @@ function askDeleteProducao(id){
 async function submitProducao(event){
   event.preventDefault();
   const form = event.currentTarget;
-  const data = new FormData(form);
-  const item = normalizeProducaoRecord({
-    id: uid(),
-    producaoMensal:true,
-    data:String(data.get('data') || todayISO()),
-    responsavel:String(data.get('responsavel') || '').trim(),
-    quantidade:Number(data.get('quantidade') || 1),
-    processoEmpresaContribuinte:String(data.get('processoEmpresaContribuinte') || '').trim(),
-    enderecoMeioComunicacao:String(data.get('enderecoMeioComunicacao') || '').trim(),
-    atividade:String(data.get('atividade') || '').trim(),
-    codigoSiaSus:String(data.get('codigoSiaSus') || '').split(/[,;\n]+/).map(code=>code.trim()).filter(Boolean),
-    autosSituacao:String(data.get('autosSituacao') || '').trim(),
-    ordemFiscalizacao:String(data.get('ordemFiscalizacao') || '').trim(),
-    areaAtuacao:String(data.get('areaAtuacao') || '').trim(),
-    chefia:String(data.get('chefia') || '').trim(),
-    createdAt:new Date().toISOString(),
-  });
-  if(!item.responsavel || !item.atividade){ showToast('Informe o responsável e a atividade realizada.'); return; }
+  captureProducaoDraft();
+  const draft = producaoFormDraft;
+  const activities = (draft?.atividades || []).map(activity=>({...activity}));
+  if(!draft?.responsavel || !activities.length || activities.some(activity=>!activity.atividade)){
+    showToast('Informe o responsável e a atividade de todas as linhas.');
+    return;
+  }
   const button = form.querySelector('button[type="submit"]');
   if(button){ button.disabled = true; button.textContent = 'Salvando...'; }
-  producaoMensal.push(item);
-  const ok = await upsertProducaoRemote(item);
-  if(ok){ producaoFormOwner = item.responsavel; producaoPessoaSelecionada = PRODUCAO_RESPONSAVEIS.includes(item.responsavel) ? '' : item.responsavel; showToast('Produção registrada com sucesso.'); goTo(item.responsavel==='Julio Cesar'?'producaoJulio':item.responsavel==='Luciane Manhães'?'producaoLuciane':'producaoDepartamento'); }
-  else { producaoMensal = producaoMensal.filter(entry=>entry.id!==item.id); if(button){button.disabled=false;button.textContent='Salvar produção';} render(); showToast('Não foi possível salvar a produção no banco de dados.'); }
+  const items = activities.map(activity=>normalizeProducaoRecord({
+    id:uid(),
+    producaoMensal:true,
+    data:draft.data || todayISO(),
+    responsavel:draft.responsavel,
+    tipoServico:draft.tipoServico,
+    quantidade:1,
+    ...activity,
+    createdAt:new Date().toISOString(),
+  }));
+  const savedItems = [];
+  for(const item of items){
+    producaoMensal.push(item);
+    const ok = await upsertProducaoRemote(item);
+    if(!ok){
+      for(const saved of savedItems) await deleteProducaoRemote(saved);
+      producaoMensal = producaoMensal.filter(entry=>!items.some(created=>created.id===entry.id));
+      if(button){button.disabled=false;button.textContent='Salvar produção';}
+      render();
+      showToast('Não foi possível salvar a produção no banco de dados.');
+      return;
+    }
+    savedItems.push(item);
+  }
+  producaoFormOwner = draft.responsavel;
+  producaoPessoaSelecionada = PRODUCAO_RESPONSAVEIS.includes(draft.responsavel) ? '' : draft.responsavel;
+  producaoMesFiltro = String(draft.data || todayISO()).slice(0,7);
+  producaoFormDraft = null;
+  producaoAtividadesDraft = [];
+  showToast(`${items.length} atividade(s) registrada(s) com sucesso.`);
+  goTo(draft.responsavel==='Julio Cesar'?'producaoJulio':draft.responsavel==='Luciane Manhães'?'producaoLuciane':'producaoDepartamento');
 }
 
 function imprimirMapaProducao(owner=''){
   const selectedOwner = owner || producaoPessoaSelecionada;
   const items = producaoFilteredItems(selectedOwner);
   const monthLabel = producaoMesFiltro ? producaoMesFiltro.split('-').reverse().join('/') : 'mês selecionado';
+  const monthTitle = producaoMesFiltro ? `Mês de ${['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'][Number(producaoMesFiltro.split('-')[1]) - 1] || monthLabel}` : 'Mês de referência';
   const title = selectedOwner ? `Produção de ${selectedOwner}` : 'Produção do Departamento de Vigilância e Saúde do Trabalhador';
+  const printAssetBase = window.location.origin;
+  const serviceSummary = [...new Set(items.map(item=>String(item.tipoServico || '').trim()).filter(Boolean))].join(', ') || 'Não informado';
   const rows = items.map(item=>{
     const codes = producaoCodes(item).join(', ') || '—';
     return `<tr><td>${esc(fmtDate(item.data))}</td><td>${esc(item.ordemFiscalizacao || '—')}</td><td>${esc(item.processoEmpresaContribuinte || item.processoProtocolo || '—')}</td><td>${esc(item.enderecoMeioComunicacao || item.endereco || '—')}</td><td>${esc(item.atividade || '—')}</td><td>${esc(codes)}</td><td>${esc(item.autosSituacao || '—')}</td><td>${esc(item.areaAtuacao || '—')}</td><td>${esc(item.chefia || item.chefias || '—')}</td><td>${esc(item.responsavel || '—')}</td></tr>`;
@@ -3075,8 +3132,8 @@ function imprimirMapaProducao(owner=''){
   const printWindow = window.open('', '_blank');
   if(!printWindow){ showToast('Permita pop-ups para gerar o PDF do mapa de produção.'); return; }
   printWindow.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Mapa de Produção VISAT — ${esc(monthLabel)}</title><style>
-    @page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#142b35;margin:0;font-size:8px}h1{font-size:16px;margin:0 0 3px;text-align:center;letter-spacing:.02em}h2{font-size:11px;margin:8px 0 4px;color:#123f4e}.meta{display:flex;justify-content:space-between;border:1px solid #6b7d83;padding:5px 7px;margin:8px 0}.meta b{font-size:8px}.map-table,.summary{width:100%;border-collapse:collapse;table-layout:fixed}.map-table th,.map-table td,.summary th,.summary td{border:1px solid #718087;padding:4px 3px;vertical-align:top;overflow-wrap:anywhere}.map-table th{background:#e7eef0;font-size:7px;text-transform:uppercase;text-align:center}.map-table th:nth-child(1){width:7%}.map-table th:nth-child(2){width:8%}.map-table th:nth-child(3){width:14%}.map-table th:nth-child(4){width:15%}.map-table th:nth-child(5){width:15%}.map-table th:nth-child(6){width:11%}.map-table th:nth-child(7){width:10%}.map-table th:nth-child(8){width:10%}.map-table th:nth-child(9){width:10%}.map-table th:nth-child(10){width:10%}.summary{width:55%;margin-top:7px}.summary th{background:#e7eef0;text-align:left}.footer{display:flex;gap:20px;margin-top:18px}.signature{border-top:1px solid #52656b;width:42%;padding-top:4px;text-align:center}.muted{color:#5c6d72;margin-top:5px}@media print{button{display:none}}
-  </style></head><body><h1>MAPA DIÁRIO DE PRODUÇÃO — VISAT</h1><div style="text-align:center;font-size:10px;font-weight:bold">${esc(title)}</div><div class="meta"><span><b>MÊS DE REFERÊNCIA:</b> ${esc(monthLabel)}</span><span><b>LANÇAMENTOS:</b> ${items.length}</span><span><b>UNIDADES:</b> ${producaoTotal(items)}</span></div><table class="map-table"><thead><tr><th>Data</th><th>Ordem de Fiscalização</th><th>Processo / Empresa / Contribuinte</th><th>Endereço / Meio de Comunicação</th><th>Atividade</th><th>Código SIA/SUS</th><th>Autos / Situação</th><th>Área de Atuação</th><th>Chefias</th><th>Responsável</th></tr></thead><tbody>${rows || `<tr><td colspan="10" style="text-align:center;height:45px">Nenhuma produção lançada neste mês.</td></tr>`}</tbody></table><h2>Resumo por código SIA/SUS</h2><table class="summary"><thead><tr><th>Código</th><th>Significado</th><th>Total</th></tr></thead><tbody>${codeSummary || '<tr><td colspan="3">Nenhum código informado.</td></tr>'}</tbody></table><div class="footer"><div class="signature">Assinatura e carimbo da equipe de fiscalização</div><div class="signature">Responsável pelo preenchimento</div></div><div class="muted">Use a opção “Salvar como PDF” na janela de impressão do navegador.</div></body></html>`);
+    @page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#142b35;margin:0;font-size:14px}h1{font-size:24px;margin:0 0 5px;text-align:center;letter-spacing:.02em}h2{font-size:18px;margin:12px 0 7px;color:#123f4e}.meta{display:flex;justify-content:space-between;border:1px solid #6b7d83;padding:5px 7px;margin:8px 0}.meta b{font-size:13px}.map-table,.summary{width:100%;border-collapse:collapse;table-layout:fixed}.map-table th,.map-table td,.summary th,.summary td{border:1px solid #718087;padding:8px 7px;vertical-align:top;overflow-wrap:anywhere}.map-table th{background:#e7eef0;font-size:14px;text-transform:uppercase;text-align:center}.map-table th:nth-child(1){width:7%}.map-table th:nth-child(2){width:8%}.map-table th:nth-child(3){width:14%}.map-table th:nth-child(4){width:15%}.map-table th:nth-child(5){width:15%}.map-table th:nth-child(6){width:11%}.map-table th:nth-child(7){width:10%}.map-table th:nth-child(8){width:10%}.map-table th:nth-child(9){width:10%}.map-table th:nth-child(10){width:10%}.summary{width:90%;margin:14px auto 0}.summary th{background:#e7eef0;text-align:left}.summary-page{page-break-before:always;break-before:page;min-height:calc(100vh - 20mm);display:flex;flex-direction:column}.pdf-header{position:relative;min-height:82px;padding:0 240px;margin-bottom:12px;text-align:center}.pdf-header img{position:absolute;top:0;max-height:74px;width:auto;object-fit:contain}.pdf-header .logo-left{left:0;max-width:240px}.pdf-header .logo-right{right:0;max-width:175px}.pdf-header h1{margin:0}.pdf-header .subtitle{font-size:14px;font-weight:bold}.footer{display:flex;justify-content:center;gap:40px;margin-top:auto;padding-top:36px}.signature{border-top:1px solid #52656b;width:42%;padding-top:4px;text-align:center}.muted{color:#5c6d72;margin-top:5px}@media print{button{display:none}}
+  </style></head><body><div class="pdf-header"><img class="logo-left" src="${printAssetBase}/assets/logo-institucional.png" alt="Identificação institucional"><div><h1>MAPA DIÁRIO DE PRODUÇÃO — VISAT</h1><div class="subtitle">${esc(title)}</div></div><img class="logo-right" src="${printAssetBase}/assets/logo-visat.png" alt="Vigilância em Saúde do Trabalhador"></div><div class="meta"><span><b>MÊS DE REFERÊNCIA:</b> ${esc(monthLabel)}</span><span><b>TIPO(S) DE SERVIÇO:</b> ${esc(serviceSummary)}</span><span><b>LANÇAMENTOS:</b> ${items.length}</span><span><b>UNIDADES:</b> ${producaoTotal(items)}</span></div><table class="map-table"><thead><tr><th>Data</th><th>Ordem de Fiscalização</th><th>Processo / Empresa / Contribuinte</th><th>Endereço / Meio de Comunicação</th><th>Atividade</th><th>Código SIA/SUS</th><th>Autos / Situação</th><th>Área de Atuação</th><th>Chefias</th><th>Responsável</th></tr></thead><tbody>${rows || `<tr><td colspan="10" style="text-align:center;height:45px">Nenhuma produção lançada neste mês.</td></tr>`}</tbody></table><div class="summary-page"><div class="pdf-header"><img class="logo-left" src="${printAssetBase}/assets/logo-institucional.png" alt="Identificação institucional"><div><h1>MAPA DIÁRIO DE PRODUÇÃO — VISAT</h1><div class="subtitle">${esc(title)}</div></div><img class="logo-right" src="${printAssetBase}/assets/logo-visat.png" alt="Vigilância em Saúde do Trabalhador"></div><h2>Resumo por código SIA/SUS</h2><div style="text-align:center;font-size:12px;font-weight:bold;margin-bottom:12px">${esc(monthTitle)}</div><table class="summary"><thead><tr><th>Código</th><th>Significado</th><th>Total de pessoas alcançadas</th></tr></thead><tbody>${codeSummary || '<tr><td colspan="3">Nenhum código informado.</td></tr>'}</tbody><tfoot><tr><th colspan="2" style="text-align:right">Total:</th><th>${producaoTotal(items)}</th></tr></tfoot></table><div class="footer"><div class="signature">Assinatura e carimbo da equipe de fiscalização</div><div class="signature">Responsável pelo preenchimento</div></div><div class="muted">Use a opção “Salvar como PDF” na janela de impressão do navegador.</div></body></html>`);
   printWindow.document.close();
   printWindow.onload = ()=>{ printWindow.focus(); printWindow.print(); };
 }
@@ -3107,9 +3164,11 @@ function isProducaoMensalRecord(r){
 function normalizeProducaoRecord(r){
   const item = {...r, producaoMensal:true};
   if(!item.id) item.id = uid();
-  item.quantidade = Math.max(1, Number(item.quantidade) || 1);
+  item.pessoasAlcancadas = Math.max(1, Number(item.pessoasAlcancadas) || Number(item.quantidade) || 1);
+  item.quantidade = item.pessoasAlcancadas;
   item.data = String(item.data || '').trim();
   item.responsavel = String(item.responsavel || '').trim();
+  item.tipoServico = String(item.tipoServico || '').trim();
   item.codigoSiaSus = Array.isArray(item.codigoSiaSus) ? item.codigoSiaSus.map(code=>String(code).trim()).filter(Boolean) : String(item.codigoSiaSus || '').split(/[,;\\n]+/).map(code=>code.trim()).filter(Boolean);
   return item;
 }
@@ -3134,24 +3193,53 @@ function normalizeControleFichaRecord(r){
   item.historico = Array.isArray(item.historico) ? item.historico : [];
   return item;
 }
-function controleFichaStorageId(item){ return item.storageId || `cf-${item.id}`; }
+function controleFichaStorageId(item){
+  const numero = normalizeControleFicha(item?.numeroFicha);
+  return numero ? `cf-2026-${numero}` : (item?.storageId || `cf-${item?.id || uid()}`);
+}
+function controleFichaYear(item){
+  if(item?.anoReferencia) return String(item.anoReferencia);
+  const idYear = String(item?.id || '').match(/^cf-(20\d{2})-/i);
+  if(idYear) return idYear[1];
+  const date = item?.dataRecebimentoEpidemio || item?.dataStatusAtual || item?.dataDistribuicao || '';
+  return String(date).slice(0,4);
+}
+function isOperationalControleFicha(item){
+  return controleFichaYear(item) === OPERATIONAL_YEAR;
+}
+function operationalControleFichas(){
+  return controleFichas.filter(isOperationalControleFicha);
+}
+function dedupeControleFichas(items){
+  const byNumber = new Map();
+  items.forEach(item=>{
+    const key = normalizeControleFicha(item.numeroFicha) || `id:${item.id}`;
+    const previous = byNumber.get(key);
+    const score = String(item.updatedAt || item.dataDistribuicao || item.dataStatusAtual || item.createdAt || '');
+    const previousScore = String(previous?.updatedAt || previous?.dataDistribuicao || previous?.dataStatusAtual || previous?.createdAt || '');
+    if(!previous || score >= previousScore) byNumber.set(key, item);
+  });
+  return [...byNumber.values()].map(item=>({...item, id:controleFichaStorageId(item)}));
+}
 function findLinkedRecord(numero){
   const key = normalizeControleFicha(numero);
   if(!key) return null;
-  if(!linkedRecordIndex){
-    linkedRecordIndex = new Map();
-    records.forEach(record=>{
-      const recordKey = normalizeControleFicha(record.fichaNumero);
-      if(recordKey && !linkedRecordIndex.has(recordKey)) linkedRecordIndex.set(recordKey, record);
-    });
-  }
-  return linkedRecordIndex.get(key) || null;
+  return operationalRecords().find(r => normalizeControleFicha(r.fichaNumero) === key) || null;
+}
+function findLinkedRecordsByName(nome){
+  const key = normalizeDuplicateText(nome);
+  if(!key) return [];
+  return operationalRecords().filter(r => normalizeDuplicateText(r.patientName) === key);
+}
+function findControleFichasByName(nome){
+  const key = normalizeDuplicateText(nome);
+  if(!key) return [];
+  return operationalControleFichas().filter(item => normalizeDuplicateText(controleFichaPatientName(item)) === key);
 }
 function controleFichaStatusDate(item){
-  if(!item) return '';
-  if(item.status === 'devolvida') return item.dataDevolucaoEpidemio || item.dataStatusAtual || item.dataRecebimentoEpidemio || item.createdAt || '';
-  if(item.status === 'com_enfermeiro') return item.dataAtribuicaoEnfermeiro || item.dataStatusAtual || item.dataRecebimentoEpidemio || item.createdAt || '';
-  return item.dataStatusAtual || item.dataRecebimentoEpidemio || item.createdAt || '';
+  if(item.status === 'devolvida') return item.dataDevolucaoEpidemio || item.dataStatusAtual || item.dataRecebimentoEpidemio;
+  if(item.status === 'com_enfermeiro') return item.dataAtribuicaoEnfermeiro || item.dataStatusAtual || item.dataRecebimentoEpidemio;
+  return item.dataStatusAtual || item.dataRecebimentoEpidemio;
 }
 function controleFichaDays(item){
   const date = controleFichaStatusDate(item);
@@ -3193,71 +3281,10 @@ function renderControlePrazoAlert(){
   const summary = Object.entries(byResponsible).map(([responsible,count])=>`<span><b>${count}</b> com ${esc(responsible)}</span>`).join('');
   return `<div class="controle-prazo-alert controle-prazo-warning"><div><b>Alerta de prazo</b><span>${overdue.length} ficha(s) em aberto há mais de 15 dias.</span></div><div class="controle-prazo-summary">${summary}</div><small>Fichas na Epidemiologia são consideradas finalizadas e não entram neste alerta.</small></div>`;
 }
-function yearFromControleDate(value){
-  const raw = String(value || '').trim();
-  if(!raw) return '';
-  const iso = raw.match(/^(20\d{2})(?:[-/T]|$)/);
-  if(iso) return iso[1];
-  const brazilian = raw.match(/(?:^|\s)[0-9]{2}[\/.-][0-9]{2}[\/.-](20\d{2})(?:$|T|\s)/);
-  if(brazilian) return brazilian[1];
-  const embedded = raw.match(/(?:^|[^0-9])(20\d{2})(?:[^0-9]|$)/);
-  return embedded ? embedded[1] : '';
-}
-function controleFichaYear(item){
-  const linked = findLinkedRecord(item?.numeroFicha);
-  if(linked) return String(yearFromRecord(linked) || '');
-  const referenceYear = yearFromControleDate(item?.anoReferencia);
-  if(referenceYear) return referenceYear;
-  const dateFields = [
-    item?.dataStatusAtual,
-    item?.dataDistribuicao,
-    item?.dataRecebimentoEpidemio,
-    item?.dataAtribuicaoEnfermeiro,
-    item?.dataDevolucaoEpidemio,
-    item?.createdAt,
-  ];
-  for(const value of dateFields){
-    const year = yearFromControleDate(value);
-    if(year) return year;
-  }
-  // Sem ficha vinculada e sem data própria, o registro não entra no fluxo.
-  return '';
-}
-function operationalControleFichas(){
-  if(operationalControleFichasCache) return operationalControleFichasCache.list;
-  const list = controleFichas.filter(item => controleFichaYear(item) === String(OPERATIONAL_YEAR));
-  const byNumero = new Map();
-  const byName = new Map();
-  list.forEach(item=>{
-    const numero = normalizeControleFicha(item.numeroFicha);
-    if(numero && !byNumero.has(numero)) byNumero.set(numero, item);
-    const name = normalizeDuplicateText(controleFichaPatientName(item));
-    if(name){
-      const matches = byName.get(name) || [];
-      matches.push(item);
-      byName.set(name, matches);
-    }
-  });
-  operationalControleFichasCache = {list, byNumero, byName};
-  return list;
-}
 function findControleFichaByNumero(numero){
   const key = normalizeControleFicha(numero);
   if(!key) return null;
-  if(!operationalControleFichasCache) operationalControleFichas();
-  return operationalControleFichasCache.byNumero.get(key) || null;
-}
-function findControleFichasByName(nome){
-  const key = normalizeDuplicateText(nome);
-  if(!key) return [];
-  if(!operationalControleFichasCache) operationalControleFichas();
-  return operationalControleFichasCache.byName.get(key) || [];
-}
-function recordIsFinalizedByEpidemiology(r){
-  const control = findControleFichaByNumero(r?.fichaNumero);
-  if(!control) return false;
-  const destination = String(control.distribuidoPara || '').trim().toLocaleLowerCase('pt-BR');
-  return control.status === 'devolvida' || destination.includes('epidemiologia');
+  return operationalControleFichas().find(item => normalizeControleFicha(item.numeroFicha) === key) || null;
 }
 function controleFichaDistributionLabel(item){
   if(!item) return '';
@@ -3287,13 +3314,17 @@ function controleFichaLinkedSummary(item){
 async function upsertControleFichaRemote(item){
   try{
     if(!supabaseClient) return false;
-    const payload = {...item, controleFicha:true, storageId:controleFichaStorageId(item), updatedAt:new Date().toISOString()};
+    const payload = {...item, id:controleFichaStorageId(item), controleFicha:true, storageId:controleFichaStorageId(item), anoReferencia:'2026', updatedAt:new Date().toISOString()};
+    Object.assign(item, {id:payload.id, storageId:payload.storageId, anoReferencia:payload.anoReferencia, updatedAt:payload.updatedAt});
     const {error} = await supabaseClient.from('records').upsert({
       id: payload.storageId,
       data: payload,
       updated_at: payload.updatedAt,
     }, {onConflict:'id'});
     if(error) throw error;
+    const {data: verifiedRows, error: verifyError} = await supabaseClient.from('records').select('id').eq('id', payload.storageId).limit(1);
+    if(verifyError) throw verifyError;
+    if(!verifiedRows?.length) throw new Error('A distribuição não foi localizada após o salvamento.');
     return true;
   }catch(error){
     console.error('Falha ao salvar o controle da ficha no Supabase', error);
@@ -3310,8 +3341,8 @@ function renderControleFichas(){
     ['devolvida','Epidemiologia (finalizadas)'],
   ];
   const currentTab = tabs.some(([key])=>key===controleTab) ? controleTab : 'todas';
-  const numeroQuery = normalizeSearchText(controleBuscaNumero).trim();
-  const nomeQuery = normalizeSearchText(controleBuscaNome).trim();
+  const numeroQuery = normalizeSearchText(controleBuscaNumeroConfirmada).trim();
+  const nomeQuery = normalizeSearchText(controleBuscaNomeConfirmada).trim();
   const list = operationalControleFichas()
     .filter(item=>controleFichaTabMatches(item,currentTab))
     .filter(item=>{
@@ -3333,20 +3364,22 @@ function renderControleFichas(){
       </div>
     </div>
     <div class="panel controle-pesquisa-panel">
-      <div class="controle-heading"><div><h2>Consultar fichas no fluxo</h2><div class="hint">Pesquise para saber rapidamente com quem cada ficha está.</div></div></div>
+      <div class="controle-heading"><div><h2>Consultar fichas no fluxo</h2><div class="hint">Digite o número ou o nome e clique em <b>Pesquisar</b> para consultar onde a ficha está.</div></div></div>
       <div class="controle-pesquisa-grid">
-        <div class="field"><label for="controleBuscaNumero">Consulta por Nº de Ficha</label><input type="text" id="controleBuscaNumero" value="${esc(controleBuscaNumero)}" placeholder="Digite o número da ficha" inputmode="numeric" autocomplete="off"></div>
-        <div class="field"><label for="controleBuscaNome">Consulta por Nome do Paciente</label><input type="text" id="controleBuscaNome" value="${esc(controleBuscaNome)}" placeholder="Digite o nome do paciente" autocomplete="off"></div>
+        <div class="controle-pesquisa-field"><div class="field"><label for="controleBuscaNumero">Consulta por Nº de Ficha</label><input type="text" id="controleBuscaNumero" value="${esc(controleBuscaNumero)}" placeholder="Digite o número da ficha" inputmode="numeric" autocomplete="off"></div><button type="button" class="btn btn-primary btn-sm" onclick="confirmarControleBusca('numero')">Pesquisar</button></div>
+        <div class="controle-pesquisa-field"><div class="field"><label for="controleBuscaNome">Consulta por Nome do Paciente</label><input type="text" id="controleBuscaNome" value="${esc(controleBuscaNome)}" placeholder="Digite o nome do paciente" autocomplete="off"></div><button type="button" class="btn btn-primary btn-sm" onclick="confirmarControleBusca('nome')">Pesquisar</button></div>
       </div>
     </div>
+    ${renderControleConsultaDetalhe(numeroQuery,nomeQuery)}
     ${renderControlePrazoAlert()}
     <div class="panel controle-distribuicao-panel">
       <div class="controle-heading">
-        <div><h2>Distribuição de Fichas</h2><div class="hint">Informe vários números separados por vírgula e escolha para onde as fichas foram distribuídas.</div></div>
+        <div><h2>Distribuição de Fichas</h2><div class="hint">Informe vários números ou nomes, um por linha, e escolha para onde as fichas foram distribuídas.</div></div>
         <span class="controle-distribuicao-mark">Distribuição em lote</span>
       </div>
       <form class="controle-distribuicao-form" id="controleDistribuicaoForm" onsubmit="submitControleDistribuicao(event)">
-        <div class="field controle-distribuicao-numeros"><label for="controleDistribuicaoNumeros">Nº das fichas <span class="req">*</span></label><textarea id="controleDistribuicaoNumeros" name="numeros" rows="2" placeholder="Ex.: 358, 368, 475, 125, 65" required></textarea><div class="hint">Você pode separar por vírgula, ponto e vírgula ou quebra de linha.</div></div>
+        <div class="field"><label for="controleDistribuicaoModo">Identificar fichas por <span class="req">*</span></label><select id="controleDistribuicaoModo" name="modo" required><option value="numero">Número da ficha</option><option value="nome">Nome da pessoa</option></select></div>
+        <div class="field controle-distribuicao-numeros"><label for="controleDistribuicaoNumeros">Números ou nomes <span class="req">*</span></label><textarea id="controleDistribuicaoNumeros" name="numeros" rows="2" placeholder="Números: 358, 368, 475&#10;Nomes: um por linha" required></textarea><div class="hint">Por número, separe por vírgula, ponto e vírgula ou quebra de linha. Por nome, use um nome completo por linha.</div></div>
         <div class="field"><label for="controleDistribuicaoDestino">Distribuir para <span class="req">*</span></label><select id="controleDistribuicaoDestino" name="destino" required><option value="">Selecione o destino</option>${CONTROLE_FICHA_DESTINATIONS.map(destino=>`<option value="${esc(destino)}">${esc(destino)}</option>`).join('')}</select></div>
         <div class="field"><label for="controleDistribuicaoData">Data da distribuição <span class="req">*</span></label><input id="controleDistribuicaoData" name="dataDistribuicao" type="date" value="${todayISO()}" required></div>
         <div class="controle-distribuicao-submit"><button class="btn btn-primary" type="submit">Distribuir fichas</button></div>
@@ -3355,8 +3388,7 @@ function renderControleFichas(){
     <div class="panel">
       <div class="toolbar"><div><h2 style="margin-bottom:3px">${esc(tabs.find(([key])=>key===currentTab)?.[1] || 'Fichas')}</h2><div class="hint">${list.length} ficha(s) ${numeroQuery || nomeQuery ? 'encontrada(s) na pesquisa.' : 'nesta visão.'}</div></div></div>
       ${list.length ? `<div class="table-scroll"><table class="controle-table"><thead><tr><th>Nº da ficha</th><th>Dados básicos</th><th>Entrada no status atual</th><th>Dias no status</th><th>Responsável</th><th>Ações</th></tr></thead><tbody>${list.map(item=>renderControleFichaRow(item)).join('')}</tbody></table></div>` : `<div class="empty-state"><div style="font-size:38px;color:var(--border);margin-bottom:8px">—</div><b>Nenhuma ficha nesta aba</b><div style="margin-top:5px">Use “Nova Entrada” para registrar uma ficha recebida da Epidemiologia.</div></div>`}
-    </div>
-    ${renderControleConsultaDrawer()}`;
+    </div>`;
 }
 function renderControleFichaRow(item){
   const statusLabel = CONTROLE_FICHA_STATUS[item.status]?.label || item.status || '—';
@@ -3379,23 +3411,61 @@ function renderControleFichaRow(item){
 async function submitControleDistribuicao(event){
   event.preventDefault();
   const form = event.currentTarget;
-  const rawNumbers = String(form.elements.numeros?.value || '');
-  const numbers = [...new Set(rawNumbers.split(/[,;\n]+/).map(value => value.trim()).filter(Boolean))];
+  const modo = String(form.elements.modo?.value || 'numero');
+  const rawValues = String(form.elements.numeros?.value || '');
+  const values = [...new Set((modo === 'nome' ? rawValues.split(/\n+/) : rawValues.split(/[,;\n]+/)).map(value => String(value).trim()).filter(Boolean))];
   const destino = String(form.elements.destino?.value || '');
   const dataDistribuicao = String(form.elements.dataDistribuicao?.value || todayISO());
-  if(!numbers.length){ showToast('Informe pelo menos um número de ficha.'); return; }
+  if(!values.length){ showToast(`Informe pelo menos ${modo === 'nome' ? 'um nome' : 'um número de ficha'}.`); return; }
   if(!CONTROLE_FICHA_DESTINATIONS.includes(destino)){ showToast('Selecione um destino válido para a distribuição.'); return; }
   const targetStatus = destino === 'Epidemiologia' ? 'devolvida' : destino === 'Departamento VISAT' ? 'departamento_visat' : 'com_enfermeiro';
   const saved = [];
   const failed = [];
-  for(const numero of numbers){
-    const current = findControleFichaByNumero(numero);
+  const rejected = [];
+  for(const value of values){
+    const numero = modo === 'numero' ? normalizeControleFicha(value) : '';
+    const linkedMatches = modo === 'nome' ? findLinkedRecordsByName(value) : [];
+    const controleMatches = modo === 'nome' ? findControleFichasByName(value) : [];
+    const current = modo === 'nome' ? (controleMatches.length === 1 ? controleMatches[0] : null) : findControleFichaByNumero(numero);
+    let linked = modo === 'nome' ? (linkedMatches.length === 1 ? linkedMatches[0] : null) : findLinkedRecord(numero);
     const isNew = !current;
+    if(modo === 'nome' && (linkedMatches.length > 1 || controleMatches.length > 1)){
+      rejected.push(`${value} (nome duplicado — informe o número)`);
+      continue;
+    }
     const now = new Date().toISOString();
+    if(!linked){
+      const createdRecord = {
+        id:uid(),
+        fichaNumero:modo === 'numero' ? numero : '',
+        patientName:modo === 'nome' ? String(value).trim() : '',
+        agravoType:'grave',
+        status:'aguardando_digitacao',
+        localizacao:destino,
+        distribuidoPara:destino,
+        anoReferencia:OPERATIONAL_YEAR,
+        dataLancamento:dataDistribuicao,
+        createdAt:now,
+      };
+      if(!await upsertRecordRemote(createdRecord)){
+        failed.push(modo === 'nome' ? value : numero);
+        continue;
+      }
+      records.push(createdRecord);
+      linked = createdRecord;
+    }
+    linked.localizacao = destino;
+    linked.distribuidoPara = destino;
+    if(!await upsertRecordRemote(linked)){
+      failed.push(modo === 'nome' ? value : numero);
+      continue;
+    }
     const next = isNew ? {
       id:`cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`,
       controleFicha:true,
-      numeroFicha:numero,
+      anoReferencia:'2026',
+      numeroFicha:modo === 'numero' ? numero : String(linked?.fichaNumero || ''),
+      patientName:modo === 'nome' ? String(value).trim() : String(linked?.patientName || ''),
       status:'departamento_visat',
       enfermeiroResponsavel:'',
       dataRecebimentoEpidemio:dataDistribuicao,
@@ -3427,57 +3497,117 @@ async function submitControleDistribuicao(event){
     if(await upsertControleFichaRemote(next)){
       if(isNew) controleFichas.push(next);
       else controleFichas = controleFichas.map(item => item.id === current.id ? next : item);
-      operationalControleFichasCache = null;
-      saved.push(numero);
-    } else failed.push(numero);
+      saved.push(modo === 'nome' ? (next.patientName || value) : numero);
+    } else failed.push(modo === 'nome' ? value : numero);
   }
   render();
-  if(failed.length){
-    showToast(`${saved.length} ficha(s) distribuída(s); falha ao salvar: ${failed.join(', ')}.`);
+  if(failed.length || rejected.length){
+    const messages = [];
+    if(failed.length) messages.push(`falha ao salvar: ${failed.join(', ')}`);
+    if(rejected.length) messages.push(`fora do fluxo de 2026 ou inexistentes: ${rejected.join(', ')}`);
+    showToast(`${saved.length ? `${saved.length} ficha(s) distribuída(s); ` : ''}${messages.join('; ')}.`);
   } else {
     showToast(`${saved.length} ficha(s) distribuída(s) para ${destino}.`);
   }
+  if(destino === 'Epidemiologia' && saved.length) showEpidemiologiaPdfOffer(saved, dataDistribuicao);
+}
+function controleFichaAgravoSigla(record){
+  return record?.agravoType === 'mental' ? 'ATMRT' : record?.agravoType === 'biologico' ? 'ATMB' : record?.agravoType === 'lerdort' ? 'LER.DORT' : 'AT';
+}
+let epidemiologiaPdfPending = null;
+function showEpidemiologiaPdfOffer(identifiers, dataDistribuicao){
+  const entries = identifiers.map(identifier=>{
+    const record = findLinkedRecord(identifier) || findLinkedRecordsByName(identifier)[0];
+    const controle = findControleFichaByNumero(identifier) || findControleFichasByName(identifier)[0];
+    return {sigla:controleFichaAgravoSigla(record), numero:record?.fichaNumero || controle?.numeroFicha || '', nome:record?.patientName || controle?.patientName || identifier || 'Nome não informado'};
+  });
+  const year = String(dataDistribuicao || todayISO()).slice(0,4);
+  epidemiologiaPdfPending = {entries, year};
+  document.body.insertAdjacentHTML('beforeend', `<div class="modal-bg" id="epidemiologiaPdfOffer" onclick="if(event.target===this)document.getElementById('epidemiologiaPdfOffer')?.remove()"><div class="modal"><h3>Distribuição salva</h3><p>${entries.length} ficha(s) foram distribuídas para a Epidemiologia. Deseja baixar a lista em PDF?</p><div class="row"><button type="button" class="btn btn-ghost" onclick="document.getElementById('epidemiologiaPdfOffer')?.remove()">Agora não</button><button type="button" class="btn btn-primary" onclick="downloadPendingEpidemiologiaPdf()">Baixar PDF da lista</button></div></div></div>`);
+}
+function downloadPendingEpidemiologiaPdf(){
+  const pending = epidemiologiaPdfPending;
+  epidemiologiaPdfPending = null;
+  document.getElementById('epidemiologiaPdfOffer')?.remove();
+  if(pending) downloadEpidemiologiaPdf(pending.entries, pending.year);
+}
+function downloadEpidemiologiaPdf(entries, year){
+  const jsPDF = window.jspdf?.jsPDF;
+  const doc = jsPDF ? new jsPDF({orientation:'landscape', unit:'mm', format:'a4'}) : null;
+  if(!doc || typeof doc.autoTable !== 'function'){
+    showToast('Não foi possível carregar o gerador de PDF. Recarregue a página e tente novamente.');
+    return;
+  }
+  const rows = entries.map(item=>[item.sigla, item.numero || 'S/N', item.nome || 'Nome não informado', `__/__/${year}`, '____________________________']);
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(13);
+  doc.text('TRÂMITE DE NOTIFICAÇÕES DEVOLVIDAS PARA EPIDEMIOLOGIA - ACIDENTE DE TRABALHO', 148.5, 14, {align:'center'});
+  doc.autoTable({
+    startY: 20,
+    head: [['AGRAVO','Nº DA FICHA','NOME','DATA DE RECEBIMENTO DA DEVOLUÇÃO DAS FICHAS','ASSINATURA']],
+    body: rows,
+    theme: 'grid',
+    styles: {font:'helvetica', fontSize:9, lineColor:[35,35,35], lineWidth:0.25, cellPadding:2.2, halign:'center', valign:'middle'},
+    headStyles: {fillColor:[164,196,225], textColor:[15,25,35], fontStyle:'bold', fontSize:8.5},
+    columnStyles: {0:{cellWidth:25}, 1:{cellWidth:28}, 2:{cellWidth:96, halign:'left'}, 3:{cellWidth:72}, 4:{cellWidth:52}},
+    margin: {left:10, right:10},
+  });
+  doc.save(`TRAMITE_EPIDEMIOLOGIA_${year}-${todayISO().slice(5)}.pdf`);
+}
+function confirmarControleBusca(tipo){
+  if(tipo === 'numero'){
+    controleBuscaNumero = String(document.getElementById('controleBuscaNumero')?.value || '').trim();
+    controleBuscaNome = '';
+    controleBuscaNumeroConfirmada = controleBuscaNumero;
+    controleBuscaNomeConfirmada = '';
+  }else{
+    controleBuscaNome = String(document.getElementById('controleBuscaNome')?.value || '').trim();
+    controleBuscaNumero = '';
+    controleBuscaNomeConfirmada = controleBuscaNome;
+    controleBuscaNumeroConfirmada = '';
+  }
+  controleConsultaDetalheAberta = true;
+  render();
+}
+function limparControleBusca(){
+  controleBuscaNumero = '';
+  controleBuscaNome = '';
+  controleBuscaNumeroConfirmada = '';
+  controleBuscaNomeConfirmada = '';
+  controleConsultaDetalheAberta = false;
+  render();
+}
+function renderControleConsultaDetalhe(numeroQuery='',nomeQuery=''){
+  if(!controleConsultaDetalheAberta || (!numeroQuery && !nomeQuery)) return '';
+  const matches = operationalControleFichas().filter(item=>{
+    const numero = normalizeSearchText(item.numeroFicha);
+    const nome = normalizeSearchText(controleFichaPatientName(item));
+    return (!numeroQuery || numero.includes(numeroQuery)) && (!nomeQuery || nome.includes(nomeQuery));
+  });
+  const queryLabel = numeroQuery ? `Nº ${esc(numeroQuery)}` : `nome “${esc(controleBuscaNomeConfirmada)}”`;
+  const body = matches.length ? matches.map(item=>`<div class="controle-consulta-result"><div><b>Nº da Ficha ${esc(item.numeroFicha || 'S/N')}</b><span>${esc(controleFichaPatientName(item) || 'Nome não informado')}</span></div><div><strong>${esc(controleFichaResponsibleLabel(item))}</strong><span>${esc(CONTROLE_FICHA_STATUS[item.status]?.label || item.status || '—')} · ${esc(fmtDate(controleFichaStatusDate(item)))}</span></div>${controleFichaDistributionChip(item)}</div>`).join('') : `<div class="controle-consulta-empty">Nenhuma ficha com ${queryLabel} foi encontrada no fluxo de 2026. Verifique o número ou confirme se a distribuição foi salva.</div>`;
+  return `<details class="controle-consulta-details" open><summary>Onde está a ficha consultada? <span>${matches.length} resultado(s)</span></summary><div class="controle-consulta-results">${body}</div><button type="button" class="btn btn-ghost btn-sm controle-consulta-clear" onclick="limparControleBusca()">Limpar consulta</button></details>`;
 }
 function setControleTab(tab){ controleTab = tab; render(); }
 function bindControleFichasEvents(){
   const numero = document.getElementById('controleBuscaNumero');
-  if(numero) numero.addEventListener('input', event=>{
-    controleBuscaNumero = event.target.value;
-    if(controleBuscaNumero.trim()){
-      controleBuscaNome = '';
-      controleConsultaDrawerOpen = true;
-    }else{
-      controleConsultaDrawerOpen = false;
-    }
-    render();
-    consultaInputFocus('controleBuscaNumero');
-  });
+  if(numero){
+    numero.addEventListener('input', event=>{
+      controleBuscaNumero = event.target.value;
+      if(controleBuscaNumero.trim()) controleBuscaNome = '';
+    });
+    numero.addEventListener('keydown', event=>{ if(event.key === 'Enter'){ event.preventDefault(); confirmarControleBusca('numero'); } });
+  }
   const nome = document.getElementById('controleBuscaNome');
-  if(nome) nome.addEventListener('input', event=>{
-    controleBuscaNome = event.target.value;
-    if(controleBuscaNome.trim()) controleBuscaNumero = '';
-    render();
-    consultaInputFocus('controleBuscaNome');
-  });
+  if(nome){
+    nome.addEventListener('input', event=>{
+      controleBuscaNome = event.target.value;
+      if(controleBuscaNome.trim()) controleBuscaNumero = '';
+    });
+    nome.addEventListener('keydown', event=>{ if(event.key === 'Enter'){ event.preventDefault(); confirmarControleBusca('nome'); } });
+  }
 }
-function closeControleConsultaDrawer(){
-  controleConsultaDrawerOpen = false;
-  render();
-}
-function renderControleConsultaDrawer(){
-  const query = String(controleBuscaNumero || '').trim();
-  if(!controleConsultaDrawerOpen || !query) return '';
-  const normalizedQuery = normalizeControleFicha(query);
-  const item = operationalControleFichas().find(candidate => normalizeControleFicha(candidate.numeroFicha) === normalizedQuery) || null;
-  const status = item ? (CONTROLE_FICHA_STATUS[item.status]?.label || item.status || 'Não informado') : '';
-  const destination = item ? (controleFichaDistributionLabel(item) || controleFichaResponsibleLabel(item) || 'Não distribuída') : '';
-  const patient = item ? (controleFichaPatientName(item) || 'Nome não informado') : '';
-  return `<div class="controle-consulta-backdrop" onclick="closeControleConsultaDrawer()"></div>
-    <aside class="controle-consulta-drawer is-open" aria-label="Detalhes da ficha consultada">
-      <div class="controle-consulta-drawer-header"><div><span class="eyebrow">Controle de Fichas · 2026</span><h2>Detalhes da ficha</h2></div><button type="button" class="controle-consulta-close" onclick="closeControleConsultaDrawer()" aria-label="Fechar consulta">×</button></div>
-      ${item ? `<div class="controle-consulta-card"><div class="controle-consulta-number"><span>Nº da ficha</span><strong>${esc(item.numeroFicha || query)}</strong></div><div class="controle-consulta-detail"><span>Nome do paciente</span><strong>${esc(patient)}</strong></div><div class="controle-consulta-detail"><span>Distribuída para</span><strong>${esc(destination)}</strong></div><div class="controle-consulta-detail"><span>Status no fluxo</span><strong>${esc(status)}</strong></div><div class="controle-consulta-detail"><span>Entrada no status atual</span><strong>${esc(fmtDate(controleFichaStatusDate(item)))}</strong></div></div>` : `<div class="controle-consulta-not-found"><strong>Ficha ${esc(query)} não localizada no fluxo de 2026.</strong><p>Este painel não consulta nem exibe registros de anos anteriores. Confira o número ou pesquise uma ficha lançada no controle operacional de 2026.</p></div>`}
-    </aside>`;
-}
+function closeControleModal(){ document.getElementById('controleModal')?.remove(); }
 function controleModalField(label,name,value,type='text',required=false){
   return `<div class="field"><label>${esc(label)}${required?' <span class="req">*</span>':''}</label><input name="${name}" type="${type}" value="${esc(value||'')}" ${required?'required':''}></div>`;
 }
@@ -3534,7 +3664,7 @@ function openControleModal(mode,id=''){
       if(target === 'com_enfermeiro') next.dataAtribuicaoEnfermeiro = next.dataStatusAtual;
       if(target === 'devolvida') next.dataDevolucaoEpidemio = next.dataStatusAtual;
       next.historico = [...(item.historico||[]), {statusAnterior:item.status||null,statusNovo:target,enfermeiroAnterior:item.enfermeiroResponsavel||null,enfermeiroNovo:next.enfermeiroResponsavel||null,dataMudanca:new Date().toISOString(),observacoes:next.observacoes||''}];
-      if(await upsertControleFichaRemote(next)){ controleFichas = controleFichas.map(x=>x.id===item.id?next:x); operationalControleFichasCache = null; closeControleModal(); render(); showToast('Status atualizado.'); }
+      if(await upsertControleFichaRemote(next)){ controleFichas = controleFichas.map(x=>x.id===item.id?next:x); closeControleModal(); render(); showToast('Status atualizado.'); }
       else showToast('Não foi possível salvar o status.');
       return;
     }
@@ -3544,6 +3674,7 @@ function openControleModal(mode,id=''){
     const next = isNew ? {
       id:`cf-${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`,
       controleFicha:true,
+      anoReferencia:OPERATIONAL_YEAR,
       numeroFicha:numero || 'S/N',
       status:'departamento_visat',
       enfermeiroResponsavel:'',
@@ -3554,8 +3685,8 @@ function openControleModal(mode,id=''){
       observacoes:String(data.get('observacoes')||'').trim(),
       historico:[],
       createdAt:new Date().toISOString(),
-    } : {...item, numeroFicha:numero || 'S/N', dataRecebimentoEpidemio:String(data.get('dataRecebimento')||item.dataRecebimentoEpidemio||todayISO()), observacoes:String(data.get('observacoes')||'').trim()};
-    if(await upsertControleFichaRemote(next)){ if(isNew) controleFichas.push(next); else controleFichas = controleFichas.map(x=>x.id===item.id?next:x); operationalControleFichasCache = null; closeControleModal(); render(); showToast(isNew?'Entrada registrada.':'Entrada corrigida.'); }
+    } : {...item, anoReferencia:OPERATIONAL_YEAR, numeroFicha:numero || 'S/N', dataRecebimentoEpidemio:String(data.get('dataRecebimento')||item.dataRecebimentoEpidemio||todayISO()), observacoes:String(data.get('observacoes')||'').trim()};
+    if(await upsertControleFichaRemote(next)){ if(isNew) controleFichas.push(next); else controleFichas = controleFichas.map(x=>x.id===item.id?next:x); closeControleModal(); render(); showToast(isNew?'Entrada registrada.':'Entrada corrigida.'); }
     else showToast('Não foi possível salvar a entrada.');
   });
 }
@@ -3703,8 +3834,6 @@ async function handleLogout(){
   await supabaseClient.auth.signOut();
   currentUser = null;
   records = [];
-  linkedRecordIndex = null;
-  operationalControleFichasCache = null;
   document.getElementById('appRoot').innerHTML = renderLogin();
   bindLoginEvents();
 }
@@ -3726,25 +3855,8 @@ function bindNavEvents(){
 async function startApp(){
   document.getElementById('appRoot').innerHTML = APP_SHELL_HTML;
   bindNavEvents();
-  const content = document.getElementById('content');
-  const restoredFromCache = restoreInitialRecordsCache();
-  recordsLoading = true;
-  if(content && !restoredFromCache){
-    content.innerHTML = `<div class="panel app-loading" role="status" aria-live="polite"><div class="app-loading-spinner"></div><strong>Carregando fichas de 2026...</strong><span>Aguarde um momento enquanto buscamos os dados do sistema.</span></div>`;
-  }
+  await loadRecords(OPERATIONAL_YEAR, true);
   carregarPessoasProducao();
-  if(restoredFromCache) render();
-  const loadPromise = loadRecords(OPERATIONAL_YEAR, true).finally(()=>{
-    recordsLoading = false;
-    if(view !== 'form' && view !== 'print') render();
-  });
-  const firstResponse = await Promise.race([
-    loadPromise.then(()=>true),
-    new Promise(resolve=>setTimeout(()=>resolve(false), INITIAL_DATA_WAIT_MS))
-  ]);
-  if(firstResponse) return;
-  // A aplicação fica utilizável mesmo se a rede ou o banco estiverem lentos.
-  // A mesma promessa continua em segundo plano e atualiza a tela quando terminar.
   render();
 }
 
@@ -3756,7 +3868,7 @@ const REQUIRED_GRAVE = ['dataAcidente','municipioOcorrencia','ufOcorrencia','tip
 const REQUIRED_LERDORT = ['dataDiagnosticoLD','regimeTratamentoLD'];
 const REQUIRED_MENTAL = ['dataDiagnosticoMental','regimeTratamentoMental'];
 const REQUIRED_BIOLOGICO = ['dataAcidenteBio','tipoExposicao','materialOrganico'];
-
+const VALID_CAT_VALUES = ['1','2','3','9'];
 function isEmpty(v){ return v==null || v==='' || (Array.isArray(v) && v.length===0); }
 // Registros importados das planilhas oficiais representam fichas já
 // encerradas na origem. Eles continuam com os dados originais, mas não devem
@@ -3769,7 +3881,6 @@ function isImported2026Record(r){
 }
 function computeAlerts(r){
   if(isImportedRecord(r)) return [{level:'green', code:'importado_sem_pendencia', label:'Sem pendências identificadas'}];
-  if(recordIsFinalizedByEpidemiology(r)) return [{level:'green', code:'epidemiologia_finalizada', label:'Ficha finalizada na Epidemiologia'}];
   const alerts = [];
   const missingCommon = REQUIRED_COMMON.filter(f => isEmpty(r[f]));
   let missingType = [];
@@ -3779,6 +3890,9 @@ function computeAlerts(r){
   else if(r.agravoType === 'biologico') missingType = REQUIRED_BIOLOGICO.filter(f => isEmpty(r[f]));
   if(missingCommon.length || missingType.length){
     alerts.push({level:'red', code:'campos_obrigatorios', label:`${missingCommon.length + missingType.length} campo(s) obrigatório(s) vazio(s)`});
+  }
+  if(!VALID_CAT_VALUES.includes(String(r.foiEmitidaCAT || ''))){
+    alerts.push({level:'red', code:'cat', label:'Emissão da CAT não informada'});
   }
   if(r.agravoType === 'grave'){
     if(isEmpty(r.diagnosticoLesaoCID10) && isEmpty(r.causaCID10)){
@@ -3845,11 +3959,11 @@ function showToast(msg){
 
 /* ============================= NAVEGAÇÃO ============================= */
 async function ensureHistoricalYearLoaded(year){
-  const key = String(year);
+  const key=String(year);
   if(loadedRecordYears.has(key)) return true;
   if(!loadingRecordYears.has(key)){
-    const promise = loadRecords(key, false).finally(()=>loadingRecordYears.delete(key));
-    loadingRecordYears.set(key, promise);
+    const promise=loadRecords(key,false).finally(()=>loadingRecordYears.delete(key));
+    loadingRecordYears.set(key,promise);
   }
   try{
     await loadingRecordYears.get(key);
@@ -3860,22 +3974,26 @@ async function ensureHistoricalYearLoaded(year){
     return false;
   }
 }
-
-function goTo(v, id){
+async function goTo(v, id){
   if(v==='analytics2025' || v==='analytics2024'){
-    const year = v.slice(-4);
-    if(!loadedRecordYears.has(year)){
-      ensureHistoricalYearLoaded(year).then(loaded=>{
-        if(loaded && view === v) render();
-      });
-    }
+    const year=v.slice(-4);
+    if(!await ensureHistoricalYearLoaded(year)) return;
   }
   view = v;
   if(v==='producaoDepartamento') producaoView = 'departamento';
   else if(v==='producaoJulio') producaoView = 'julio';
   else if(v==='producaoLuciane') producaoView = 'luciane';
-  if(v==='analytics2025' || v==='analytics2024') analyticsCardFilter = null;
+  if(v==='analytics2025' || v==='analytics2024' || v==='comparison') analyticsCardFilter = null;
   if(v==='form'){
+    if(id){
+      const existingRecord = records.find(r=>r.id===id);
+      if(existingRecord && yearFromRecord(existingRecord) !== OPERATIONAL_YEAR){
+        showToast('Fichas de 2024 e 2025 ficam fora do fluxo operacional de 2026.');
+        view = 'analytics';
+        render();
+        return;
+      }
+    }
     editingId = id || null;
     formPage = 1;
     const existing = id ? records.find(r=>r.id===id) : null;
@@ -3929,6 +4047,9 @@ function render(){
     applyPdfFieldVisuals();
     refreshDuplicateValidation();
     if (typeof initVoiceDictation === 'function') initVoiceDictation();
+    if (typeof prepararHistoricoWhatsApp === 'function') prepararHistoricoWhatsApp();
+  } else if (typeof encerrarAssinaturasWhatsApp === 'function') {
+    encerrarAssinaturasWhatsApp();
   }
   if(view==='consulta') bindConsultaEvents();
   if(view==='controleFichas') bindControleFichasEvents();
@@ -4099,10 +4220,10 @@ function getRequiredFieldsForRecord(r){
 }
 
 function getMissingDataLabels(r){
-  if(recordIsFinalizedByEpidemiology(r)) return [];
   const missing = getRequiredFieldsForRecord(r)
     .filter(field => isEmpty(r[field]))
     .map(field => REQUIRED_FIELD_LABELS[field] || field);
+  if(!VALID_CAT_VALUES.includes(String(r.foiEmitidaCAT || ''))) missing.push('Emissão da CAT');
   if(r.agravoType === 'grave'){
     if(isEmpty(r.diagnosticoLesaoCID10) && isEmpty(r.causaCID10)) missing.push('CID ou causa da lesão');
     if(isEmpty(r.investigadorNome)) missing.push('Nome do investigador');
@@ -4120,8 +4241,10 @@ function normalizeUnidadeSaude(value){
   const raw = String(value || '').trim();
   if(!raw) return 'Não informado';
   const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ');
-  if(normalized.includes('PSMRO') || normalized.includes('PRONTO SOCORRO') || normalized.includes('PONTO SOCORRO')) return 'Pronto Socorro (PSMRO)';
-  if(/\bUPA\b/.test(normalized)) return 'UPA';
+  if(normalized === 'UPA' || normalized.includes('VALMIR HESP') || normalized.includes('VALMIR ESP')) return 'UPA';
+  if(['PMRO','PRMRO','PSMRS','PSRMO','PSRO','PRONTO SOCORRO','PRONTO SOCORRO (PSMRO)','PRONTO SOCORRO - PSMRO'].includes(normalized) || normalized.includes('PSMRO')) return 'PRONTO SOCORRO - PSMRO';
+  if(['HMNM','HM NOELMA MONTEIRO','HOSPITAL MUNICIPAL','H.M. NELMA MONTEIRO','HM DOUTORA NAELMA','HOSPITAL MUNICIPAL DRA. NOELMA MONTEIRO'].includes(normalized) || normalized.includes('NOELMA') || normalized.includes('NAELMA')) return 'HOSPITAL MUNICIPAL DRA. NOELMA MONTEIRO';
+  if(normalized.includes('CIDADE PRAIANA')) return 'ESF CIDADE PRAIANA';
   return raw;
 }
 
@@ -4160,75 +4283,46 @@ function applyDashFilters(list, filterState=dashFilters){
 }
 
 function getAnalyticsSelection(filter){
-  if(!filter) return {kind:null, value:null};
-  if(filter.startsWith('facet:')){
-    const parts = filter.split(':');
-    return {kind:parts[1] || '', value:parts.slice(2).join(':') ? decodeURIComponent(parts.slice(2).join(':')) : ''};
-  }
   if(filter && filter.startsWith('unit:')) return {kind:'unit', value:decodeURIComponent(filter.slice(5))};
   if(filter && filter.startsWith('month:')) return {kind:'month', value:filter.slice(6)};
   return {kind:filter, value:null};
 }
-function setAnalyticsFacetFilter(kind, value=''){
-  let rawValue = String(value ?? '');
-  try { rawValue = decodeURIComponent(rawValue); } catch (_) {}
-  const next = `facet:${kind}:${encodeURIComponent(rawValue)}`;
-  analyticsCardFilter = analyticsCardFilter === next ? null : next;
-  analyticsDrawerOpen = analyticsCardFilter !== null;
+function setAnalyticsCardFilter(filter){
+  analyticsCardFilter = analyticsCardFilter === filter ? null : filter;
   render();
 }
-function closeAnalyticsDrawer(){ analyticsDrawerOpen = false; analyticsCardFilter = null; render(); }
-function setAnalyticsCardFilter(filter){
-  setAnalyticsFacetFilter(filter === 'all' ? 'all' : filter, '');
+function setAnalyticsUnitFilter(unit){
+  // O valor chega codificado pelo atributo onclick; a decodificação ocorre em getAnalyticsSelection.
+  setAnalyticsCardFilter(`unit:${unit}`);
 }
-function setAnalyticsUnitFilter(unit){ setAnalyticsFacetFilter('unit', unit); }
-function setAnalyticsMonthFilter(month, agravo=''){ setAnalyticsFacetFilter(agravo ? 'monthAgravo' : 'month', agravo ? `${month}|${agravo}` : month); }
-function analyticsSelectionMatches(r, selection){
-  const {kind,value} = selection;
-  if(kind === 'all') return true;
-  if(kind === 'agravo') return r.agravoType === value;
-  if(kind === 'moto') return isMotoAccident(r);
-  if(kind === 'unit') return normalizeUnidadeSaude(r.unidadeSaude) === value;
-  if(kind === 'month') return String(getEventDate(r)).slice(5,7) === String(value).padStart(2,'0');
-  if(kind === 'monthAgravo') { const [month,agravo] = String(value).split('|'); return r.agravoType===agravo && String(getEventDate(r)).slice(5,7)===month; }
-  if(kind === 'sexo') return (r.sexo || 'I') === value;
-  if(kind === 'status') return (r.status || '') === value;
-  if(kind === 'raca') return (r.racaCor || 'nao-informado') === value;
-  if(kind === 'escolaridade') return (r.escolaridade || 'nao-informado') === value;
-  if(kind === 'tipoAcidente') return r.agravoType==='grave' && (r.tipoAcidente || 'nao-informado') === value;
-  if(kind === 'occupation') return occupationRecordIdentity(r).key === value;
-  if(kind === 'bodyRegion'){
-    const region = BODY_REGIONS.find(b=>b.key===value);
-    return Boolean(region && Array.isArray(r.partesCorpo) && r.partesCorpo.some(part=>region.match.includes(part)));
-  }
-  if(kind === 'obito') return isObito(r);
-  return false;
+function setAnalyticsMonthFilter(month){
+  setAnalyticsCardFilter(`month:${month}`);
 }
-function renderAnalyticsDrawer(list, filter){
-  if(!analyticsDrawerOpen || !filter) return '';
+
+function renderAnalyticsSelection(list, filter){
+  if(!filter || !list) return '';
   const selection = getAnalyticsSelection(filter);
-  const title = selection.kind === 'all' ? 'Todas as fichas filtradas' :
-    selection.kind === 'agravo' ? (AGRAVOS[selection.value]?.label || 'Agravo') :
-    selection.kind === 'unit' ? `Unidade: ${selection.value}` :
-    selection.kind === 'month' ? `Mês: ${MESES[Number(selection.value)-1] || selection.value}` :
-    selection.kind === 'monthAgravo' ? `${AGRAVOS[String(selection.value).split('|')[1]]?.label || 'Agravo'} — ${MESES[Number(String(selection.value).split('|')[0])-1] || 'Mês'}` :
-    selection.kind === 'sexo' ? ({M:'Gênero masculino',F:'Gênero feminino',I:'Gênero ignorado'}[selection.value] || 'Gênero') :
-    selection.kind === 'status' ? (selection.value==='finalizado'?'Finalizado':'Aguardando investigação') :
-    selection.kind === 'raca' ? (RACA_LABELS[selection.value] || 'Raça/Cor não informada') :
-    selection.kind === 'escolaridade' ? (ESCOLARIDADE_LABELS[selection.value] || 'Escolaridade não informada') :
-    selection.kind === 'tipoAcidente' ? ({'1':'Acidente típico','2':'Acidente de trajeto','9':'Tipo ignorado','nao-informado':'Tipo não informado'}[selection.value] || 'Tipo de acidente') :
-    selection.kind === 'moto' ? 'Acidentes envolvendo motocicleta' :
-    selection.kind === 'occupation' ? 'Ocupação selecionada' :
-    selection.kind === 'bodyRegion' ? (BODY_REGIONS.find(b=>b.key===selection.value)?.label || 'Parte do corpo') :
-    selection.kind === 'obito' ? 'Óbitos registrados' : 'Fichas relacionadas';
-  const matches = (list || []).filter(r=>analyticsSelectionMatches(r, selection));
-  return `<div class="analytics-drawer-backdrop" onclick="closeAnalyticsDrawer()"></div>
-    <aside class="analytics-drawer is-open" aria-label="Fichas relacionadas ao indicador">
-      <div class="analytics-drawer-header"><div><span class="eyebrow">Dashboard Analítico</span><h2>${esc(title)}</h2><div class="hint">${matches.length} ficha(s) relacionada(s)</div></div><button type="button" class="analytics-drawer-close" onclick="closeAnalyticsDrawer()" aria-label="Fechar">×</button></div>
-      <div class="analytics-drawer-body">${matches.length ? `<div class="selection-list">${matches.map(r=>`<button type="button" class="analytics-record-item" onclick="goTo('form','${esc(r.id)}')"><span class="analytics-record-number">${esc(fichaLabel(r))}</span><span class="analytics-record-main"><b>${esc(r.patientName||'(sem nome)')}</b><small>${esc(AGRAVOS[r.agravoType]?.label||'')} · Notificação: ${esc(fmtDate(r.dataNotificacao || getEventDate(r)))}</small></span><span class="analytics-record-arrow">→</span></button>`).join('')}</div>` : '<div class="analytics-drawer-empty">Nenhuma ficha encontrada para este indicador com os filtros atuais.</div>'}</div>
+  const title = selection.kind === 'all'
+    ? 'Todas as fichas filtradas'
+    : selection.kind === 'moto'
+      ? 'Fichas com indício de acidente envolvendo motocicleta'
+      : selection.kind === 'unit'
+        ? `Fichas — ${selection.value}`
+        : selection.kind === 'month'
+          ? `Fichas — ${MESES[Number(selection.value)-1] || 'Mês selecionado'}`
+          : (AGRAVOS[selection.kind]?.label || 'Fichas selecionadas');
+  if(selection.kind === 'unit'){
+    return `<aside class="analytics-unit-drawer" aria-label="Fichas da unidade ${esc(selection.value)}">
+      <div class="analytics-unit-drawer-header"><div><strong>${esc(selection.value)}</strong><span>${list.length} ficha(s) encontrada(s)</span></div><button type="button" class="btn btn-ghost btn-sm" onclick="setAnalyticsCardFilter(null)">Fechar</button></div>
+      <div class="analytics-unit-drawer-body">${renderFichaSelectionList(list)}</div>
     </aside>`;
+  }
+  return `<div class="panel selection-panel analytics-selection-panel">
+    <div class="selection-heading"><div><h2>${esc(title)}</h2><div class="selection-hint">Clique em uma ficha para abrir o cadastro completo.</div></div><span class="selection-count">${list.length}</span></div>
+    ${renderFichaSelectionList(list)}
+  </div>`;
 }
-function renderAnalyticsSelection(){ return ''; }
+
 function yearFromRecord(r){
   if(r && r.anoReferencia) return String(r.anoReferencia);
   const sourceId = String(r?.id || '');
@@ -4240,7 +4334,7 @@ function yearFromRecord(r){
 function recordsForYear(year){
   return year ? records.filter(r=>yearFromRecord(r)===String(year)) : records;
 }
-const OPERATIONAL_YEAR = '2026';
+const OPERATIONAL_YEAR = String(new Date().getFullYear());
 function operationalRecords(){
   return recordsForYear(OPERATIONAL_YEAR);
 }
@@ -4300,8 +4394,20 @@ function renderAnalytics(forcedYear=''){
   const total = filtered.length;
   const byType = {};
   Object.keys(AGRAVOS).forEach(k=> byType[k] = filtered.filter(r=>r.agravoType===k).length);
+  const animalAgressorCount = filtered.filter(r=>r.tipoFichaAnimal === 'animal_agressor').length;
+  const animalPeconhentoCount = filtered.filter(r=>r.tipoFichaAnimal === 'animal_peconhento').length;
   const selection = getAnalyticsSelection(analyticsCardFilter);
-  const analyticsSelected = analyticsCardFilter ? filtered.filter(r=>analyticsSelectionMatches(r, selection)) : null;
+  const analyticsSelected = selection.kind === 'all'
+    ? filtered
+    : selection.kind === 'moto'
+      ? filtered.filter(isMotoAccident)
+      : selection.kind === 'unit'
+        ? filtered.filter(r=>normalizeUnidadeSaude(r.unidadeSaude) === selection.value)
+        : selection.kind === 'month'
+          ? filtered.filter(r=>(r.dataNotificacao || '').slice(5,7) === selection.value)
+          : selection.kind
+            ? filtered.filter(r=>r.agravoType===selection.kind)
+            : null;
   const motoCount = filtered.filter(isMotoAccident).length;
   const unidades = distinctNormalizedUnits(sourceRecords);
   const municipios = distinctValues('municipioNotificacao', sourceRecords);
@@ -4333,11 +4439,13 @@ function renderAnalytics(forcedYear=''){
   ${!sourceRecords.length ? `<div class="panel"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg><div>Nenhuma notificação de ${esc(forcedYear || OPERATIONAL_YEAR)} encontrada para os filtros aplicados.</div></div></div>` : `
   <div class="analytics-layout">
       <div class="indicator-col">
-      <div class="ind-card total is-clickable ${selection.kind==='all'?'selected':''}" role="button" tabindex="0" title="Clique para listar todas as fichas filtradas" onclick="setAnalyticsCardFilter('all')"><div class="n">${total}</div><div class="l">Total Geral de Ocorrências</div></div>
+      <div class="ind-card total is-clickable ${analyticsCardFilter==='all'?'selected':''}" role="button" tabindex="0" title="Clique para listar todas as fichas filtradas" onclick="setAnalyticsCardFilter('all')"><div class="n">${total}</div><div class="l">Total Geral de Ocorrências</div></div>
       ${Object.entries(AGRAVOS).map(([k,v])=>`
-        <div class="ind-card ${k} is-clickable ${selection.kind==='agravo' && selection.value===k?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas desta classificação" onclick="setAnalyticsFacetFilter('agravo','${k}')"><div class="n">${byType[k]}</div><div class="l">${esc(v.label)}</div><div class="pct">${pct(byType[k],total)}% do total</div></div>
+        <div class="ind-card ${k} is-clickable ${analyticsCardFilter===k?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas desta classificação" onclick="setAnalyticsCardFilter('${k}')"><div class="n">${byType[k]}</div><div class="l">${esc(v.label)}</div><div class="pct">${pct(byType[k],total)}% do total</div></div>
       `).join('')}
-      <div class="ind-card moto is-clickable ${selection.kind==='moto'?'selected':''}" role="button" tabindex="0" title="Clique para listar os indícios de acidentes envolvendo motocicleta" onclick="setAnalyticsFacetFilter('moto','')"><div class="n">${motoCount}</div><div class="l">Acidentes envolvendo moto</div><div class="pct">${pct(motoCount,total)}% do total</div></div>
+      <div class="ind-card moto is-clickable ${analyticsCardFilter==='moto'?'selected':''}" role="button" tabindex="0" title="Clique para listar os indícios de acidentes envolvendo motocicleta" onclick="setAnalyticsCardFilter('moto')"><div class="n">${motoCount}</div><div class="l">Acidentes envolvendo moto</div><div class="pct">${pct(motoCount,total)}% do total</div></div>
+      <div class="ind-card animal-agressor"><div class="n">${animalAgressorCount}</div><div class="l">Ficha de animal agressor</div><div class="pct">${pct(animalAgressorCount,total)}% do total</div></div>
+      <div class="ind-card animal-peconhento"><div class="n">${animalPeconhentoCount}</div><div class="l">Ficha de animal peçonhento</div><div class="pct">${pct(animalPeconhentoCount,total)}% do total</div></div>
     </div>
     <div>
       <div class="charts-grid">
@@ -4361,7 +4469,7 @@ function renderAnalytics(forcedYear=''){
       </div>
       </div>
     </div>
-    ${renderAnalyticsDrawer(filtered, analyticsCardFilter)}
+    ${renderAnalyticsSelection(analyticsSelected, analyticsCardFilter)}
   `}
   <div class="bm-tooltip" id="bmTooltip"></div>
   `;
@@ -4394,7 +4502,7 @@ function renderChartMensal(list){
   const toY = v => padT + (H-padT-padB) * (1 - v/maxVal);
   const pathFor = arr => arr.map((v,i)=> `${i===0?'M':'L'} ${xFor(i).toFixed(1)} ${toY(v).toFixed(1)}`).join(' ');
   const seriesSvg = Object.entries(seriesData).map(([k,arr])=>{
-    const points = arr.map((v,i)=> v ? `<circle class="monthly-hit-area" cx="${xFor(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="11" fill="transparent" stroke="none" role="button" tabindex="0" aria-label="${v} ocorrência(s) em ${months[i]}" onclick="setAnalyticsMonthFilter('${String(i+1).padStart(2,'0')}','${k}')"/><circle class="monthly-point" cx="${xFor(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="4" fill="${AGRAVO_HEX[k]}" pointer-events="none"/><text class="monthly-point-value is-clickable" x="${xFor(i).toFixed(1)}" y="${(toY(v)-8).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="700" fill="${AGRAVO_HEX[k]}" role="button" tabindex="0" aria-label="${v} ocorrência(s) em ${months[i]}" onclick="setAnalyticsMonthFilter('${String(i+1).padStart(2,'0')}','${k}')">${v}</text>` : '').join('');
+    const points = arr.map((v,i)=> v ? `<circle class="monthly-point is-clickable" cx="${xFor(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="4" fill="${AGRAVO_HEX[k]}" onclick="setAnalyticsMonthFilter('${String(i+1).padStart(2,'0')}')"/><text class="monthly-point-value is-clickable" x="${xFor(i).toFixed(1)}" y="${(toY(v)-8).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="700" fill="${AGRAVO_HEX[k]}" role="button" tabindex="0" aria-label="${v} ocorrência(s) em ${months[i]}" onclick="setAnalyticsMonthFilter('${String(i+1).padStart(2,'0')}')">${v}</text>` : '').join('');
     return `<path d="${pathFor(arr)}" fill="none" stroke="${AGRAVO_HEX[k]}" stroke-width="2.2"/>${points}`;
   }).join('');
   return `<div class="chart-panel wide wide-monthly"><h3>Quantidade de Acidentes por Mês</h3>
@@ -4409,20 +4517,20 @@ function renderChartMensal(list){
   </div>`;
 }
 
-function donutSVG(segments, size, stroke, filterKind='status'){
+function donutSVG(segments, size, stroke){
   const total = segments.reduce((s,x)=>s+x.value,0) || 1;
   const r = (size-stroke)/2, c = size/2, circumference = 2*Math.PI*r;
   let offset = 0;
   const circles = segments.map(seg=>{
     const frac = seg.value/total;
     const dash = frac*circumference;
-    const el = `<circle class="is-clickable" role="button" tabindex="0" aria-label="${esc(seg.label || '')}" onclick="setAnalyticsFacetFilter('${filterKind}','${encodeURIComponent(seg.key || '')}')" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${seg.color}" stroke-width="${stroke}" stroke-dasharray="${dash.toFixed(1)} ${(circumference-dash).toFixed(1)}" stroke-dashoffset="${(-offset).toFixed(1)}" transform="rotate(-90 ${c} ${c})"/>`;
+    const el = `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${seg.color}" stroke-width="${stroke}" stroke-dasharray="${dash.toFixed(1)} ${(circumference-dash).toFixed(1)}" stroke-dashoffset="${(-offset).toFixed(1)}" transform="rotate(-90 ${c} ${c})"/>`;
     offset += dash;
     return el;
   }).join('');
   return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${circles}<text x="${c}" y="${c}" text-anchor="middle" dominant-baseline="middle" font-family="monospace" font-size="20" font-weight="700" fill="#16262C">${total}</text></svg>`;
 }
-function pieSVG(segments, size, filterKind='sexo'){
+function pieSVG(segments, size){
   const total = segments.reduce((sum, segment)=>sum + segment.value, 0);
   if(!total) return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-label="Sem dados de gênero"><circle cx="${size/2}" cy="${size/2}" r="${size/2-2}" fill="#E8ECED"/></svg>`;
   const center = size/2;
@@ -4436,7 +4544,7 @@ function pieSVG(segments, size, filterKind='sexo'){
     const large = angle > Math.PI ? 1 : 0;
     const d = `M ${center} ${center} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${radius} ${radius} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`;
     start = end;
-    return `<path class="is-clickable" role="button" tabindex="0" aria-label="${esc(segment.label || '')}" onclick="setAnalyticsFacetFilter('${filterKind}','${encodeURIComponent(segment.key || '')}')" d="${d}" fill="${segment.color}"/>`;
+    return `<path d="${d}" fill="${segment.color}"/>`;
   }).join('');
   return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img" aria-label="Distribuição por gênero">${paths}<circle cx="${center}" cy="${center}" r="1.5" fill="#fff"/></svg>`;
 }
@@ -4451,8 +4559,8 @@ function renderChartGenero(list){
   ];
   return `<div class="chart-panel gender-panel"><h3>Gênero</h3>
     <div class="donut-wrap">
-      ${total? pieSVG(segments,136,'sexo') : '<div class="empty-mini">Sem dados</div>'}
-      <div class="donut-legend">${segments.map(segment=>`<div class="legend-row is-clickable" role="button" tabindex="0" onclick="setAnalyticsFacetFilter('sexo','${segment.key}')"><span class="sw" style="background:${segment.color}"></span><span class="lbl">${segment.label}</span><span class="val">${segment.value} (${pct(segment.value,total)}%)</span></div>`).join('')}</div>
+      ${total? pieSVG(segments,136) : '<div class="empty-mini">Sem dados</div>'}
+      <div class="donut-legend">${segments.map(segment=>`<div class="legend-row"><span class="sw" style="background:${segment.color}"></span><span class="lbl">${segment.label}</span><span class="val">${segment.value} (${pct(segment.value,total)}%)</span></div>`).join('')}</div>
     </div>
   </div>`;
 }
@@ -4462,10 +4570,10 @@ function renderChartStatusInvestigacao(list){
   const total = list.length;
   return `<div class="chart-panel"><h3>Status de Investigação</h3>
     <div class="donut-wrap">
-      ${total? donutSVG([{key:'finalizado',label:'Finalizado',value:fin,color:'#1B8A72'},{key:'aguardando_investigacao',label:'Aguardando investigação',value:agu,color:'#B8791A'}],108,16,'status') : '<div class="empty-mini">Sem dados</div>'}
+      ${total? donutSVG([{value:fin,color:'#1B8A72'},{value:agu,color:'#B8791A'}],108,16) : '<div class="empty-mini">Sem dados</div>'}
       <div class="donut-legend">
-        <div class="legend-row is-clickable" role="button" tabindex="0" onclick="setAnalyticsFacetFilter('status','finalizado')"><span class="sw" style="background:#1B8A72"></span><span class="lbl">Finalizado</span><span class="val">${fin} (${pct(fin,total)}%)</span></div>
-        <div class="legend-row is-clickable" role="button" tabindex="0" onclick="setAnalyticsFacetFilter('status','aguardando_investigacao')"><span class="sw" style="background:#B8791A"></span><span class="lbl">Aguardando Investigação</span><span class="val">${agu} (${pct(agu,total)}%)</span></div>
+        <div class="legend-row"><span class="sw" style="background:#1B8A72"></span><span class="lbl">Finalizado</span><span class="val">${fin} (${pct(fin,total)}%)</span></div>
+        <div class="legend-row"><span class="sw" style="background:#B8791A"></span><span class="lbl">Aguardando Investigação</span><span class="val">${agu} (${pct(agu,total)}%)</span></div>
       </div>
     </div>
   </div>`;
@@ -4479,7 +4587,7 @@ function renderChartRaca(list){
   rows.push(['Não informado', naoInformado]);
   const max = Math.max(1, ...rows.map(r=>r[1]));
   return `<div class="chart-panel"><h3>Raça/Cor</h3>
-    ${total? rows.map(([l,n])=>{ const key=Object.entries(RACA_LABELS).find(([,label])=>label===l)?.[0] || 'nao-informado'; return `<div class="bar-row is-clickable" role="button" tabindex="0" onclick="setAnalyticsFacetFilter('raca','${key}')"><div class="lbl">${esc(l)}</div><div class="track"><div class="fill" style="width:${n/max*100}%;background:var(--primary-2)"></div></div><div class="val">${n} (${pct(n,total)}%)</div></div>`}).join('') : '<div class="empty-mini">Sem dados</div>'}
+    ${total? rows.map(([l,n])=>`<div class="bar-row"><div class="lbl">${esc(l)}</div><div class="track"><div class="fill" style="width:${n/max*100}%;background:var(--primary-2)"></div></div><div class="val">${n} (${pct(n,total)}%)</div></div>`).join('') : '<div class="empty-mini">Sem dados</div>'}
   </div>`;
 }
 function renderChartEscolaridade(list){
@@ -4491,7 +4599,7 @@ function renderChartEscolaridade(list){
   if(naoInformado) rows.push(['Não informado', naoInformado]);
   const max = Math.max(1, ...rows.map(r=>r[1]));
   return `<div class="chart-panel"><h3>Escolaridade</h3>
-    ${total && rows.length? rows.sort((a,b)=>b[1]-a[1]).map(([l,n])=>{ const key=Object.entries(ESCOLARIDADE_LABELS).find(([,label])=>label===l)?.[0] || 'nao-informado'; return `<div class="bar-row is-clickable" role="button" tabindex="0" onclick="setAnalyticsFacetFilter('escolaridade','${key}')"><div class="lbl" title="${esc(l)}">${esc(l)}</div><div class="track"><div class="fill" style="width:${n/max*100}%;background:var(--accent)"></div></div><div class="val">${n} (${pct(n,total)}%)</div></div>`}).join('') : '<div class="empty-mini">Sem dados</div>'}
+    ${total && rows.length? rows.sort((a,b)=>b[1]-a[1]).map(([l,n])=>`<div class="bar-row"><div class="lbl" title="${esc(l)}">${esc(l)}</div><div class="track"><div class="fill" style="width:${n/max*100}%;background:var(--accent)"></div></div><div class="val">${n} (${pct(n,total)}%)</div></div>`).join('') : '<div class="empty-mini">Sem dados</div>'}
   </div>`;
 }
 function renderChartTipoAcidente(list){
@@ -4502,7 +4610,7 @@ function renderChartTipoAcidente(list){
   const rows = [['Típico',counts['1']],['Trajeto',counts['2']],['Ignorado',counts['9']],['Não informado',counts['']]].filter(r=>r[1]>0);
   const max = Math.max(1,...rows.map(r=>r[1]));
   return `<div class="chart-panel"><h3>Tipo de Acidente <span style="font-weight:400;text-transform:none;color:var(--text-muted)">(Grave)</span></h3>
-    ${total && rows.length? rows.map(([l,n])=>{ const key={'Típico':'1','Trajeto':'2','Ignorado':'9','Não informado':'nao-informado'}[l] || 'nao-informado'; return `<div class="bar-row is-clickable" role="button" tabindex="0" onclick="setAnalyticsFacetFilter('tipoAcidente','${key}')"><div class="lbl">${l}</div><div class="track"><div class="fill" style="width:${n/max*100}%;background:${AGRAVO_HEX.grave}"></div></div><div class="val">${n} (${pct(n,total)}%)</div></div>`}).join('') : '<div class="empty-mini">Sem registros de Acidente Grave</div>'}
+    ${total && rows.length? rows.map(([l,n])=>`<div class="bar-row"><div class="lbl">${l}</div><div class="track"><div class="fill" style="width:${n/max*100}%;background:${AGRAVO_HEX.grave}"></div></div><div class="val">${n} (${pct(n,total)}%)</div></div>`).join('') : '<div class="empty-mini">Sem registros de Acidente Grave</div>'}
   </div>`;
 }
 function renderChartPiramide(list){
@@ -4512,7 +4620,7 @@ function renderChartPiramide(list){
   const total = list.length;
   return `<div class="chart-panel"><h3>Pirâmide por Tipo de Agravo</h3>
     <div class="pyramid">
-      ${counts.map(c=>`<div class="pyr-row is-clickable" role="button" tabindex="0" onclick="setAnalyticsFacetFilter('agravo','${c.k}')" style="width:${total? (20+ (c.n/max*70)) : 20}%;background:${AGRAVO_HEX[c.k]}">${esc(AGRAVOS[c.k].label)}: ${c.n} (${pct(c.n,total)}%)</div>`).join('')}
+      ${counts.map(c=>`<div class="pyr-row" style="width:${total? (20+ (c.n/max*70)) : 20}%;background:${AGRAVO_HEX[c.k]}">${esc(AGRAVOS[c.k].label)}: ${c.n} (${pct(c.n,total)}%)</div>`).join('')}
     </div>
   </div>`;
 }
@@ -4611,7 +4719,8 @@ function clickBmRegion(key){
   const n = lastBodyRegionData.counts[key]||0;
   const total = lastBodyRegionData.totalHits||0;
   bmSelectedRegion = bmSelectedRegion===key ? null : key;
-  setAnalyticsFacetFilter('bodyRegion', key);
+  render();
+  showToast(`${region.label}: ${n} ocorrência(s) — ${pct(n,total)}% das áreas informadas`);
 }
 function occupationIconSvg(label){
   const text = normalizeSearchText(label);
@@ -4662,19 +4771,6 @@ function formatCnaeDisplay(value){
 function occupationLookupKey(value){
   return normalizeSearchText(String(value || '')).replace(/[^a-z0-9]/g,'');
 }
-let cboLookupCache = null;
-const occupationNameCache = new WeakMap();
-function getCboLookupCache(){
-  if(cboLookupCache) return cboLookupCache;
-  cboLookupCache = new Map();
-  CBO_DB.forEach(item=>{
-    [item.code, item.sinan].forEach(value=>{
-      const key = occupationLookupKey(value);
-      if(key && !cboLookupCache.has(key)) cboLookupCache.set(key, item);
-    });
-  });
-  return cboLookupCache;
-}
 function formatOccupationLabel(value){
   const raw = String(value || '').trim();
   if(!raw) return '';
@@ -4687,26 +4783,19 @@ function formatOccupationLabel(value){
 function findOccupationInCboDb(value){
   const key = occupationLookupKey(value);
   if(!key || !Array.isArray(CBO_DB)) return null;
-  return getCboLookupCache().get(key) || null;
+  return CBO_DB.find(item=>occupationLookupKey(item.code)===key || occupationLookupKey(item.sinan)===key) || null;
 }
 function resolveOccupationName(record){
-  if(record && occupationNameCache.has(record)) return occupationNameCache.get(record);
   const candidates = [record.ocupacao, record.cbo, record.numeroCbo, record.cboOcupacao, record.codigoCbo];
   let textualFallback = '';
   for(const candidate of candidates){
     const raw = String(candidate || '').trim();
     if(!raw || normalizeSearchText(raw)==='nao informado') continue;
     const found = findOccupationInCboDb(raw);
-    if(found){
-      const result = formatOccupationLabel(found.desc);
-      occupationNameCache.set(record, result);
-      return result;
-    }
+    if(found) return formatOccupationLabel(found.desc);
     if(!/^[0-9a-z.\-\/]+$/i.test(raw) || /[a-záàâãéêíóôõúç]/i.test(raw) && !/^\d/.test(raw)) textualFallback = raw;
   }
-  const result = textualFallback ? formatOccupationLabel(textualFallback) : 'Ocupação não identificada';
-  if(record) occupationNameCache.set(record, result);
-  return result;
+  return textualFallback ? formatOccupationLabel(textualFallback) : 'Ocupação não identificada';
 }
 function occupationRecordIdentity(record){
   const occupation = resolveOccupationName(record);
@@ -4725,8 +4814,8 @@ function renderChartOcupacoes(list){
     });
     const top = [...rows.values()].sort((a,b)=>b.count-a.count || a.occupation.localeCompare(b.occupation,'pt-BR') || a.cnae.localeCompare(b.cnae,'pt-BR')).slice(0,10);
     return `<div class="occupation-strip ${key}">
-      <div class="occupation-strip-head is-clickable" role="button" tabindex="0" onclick="setAnalyticsFacetFilter('agravo','${key}')"><span class="occupation-strip-dot" style="background:${AGRAVO_HEX[key]}"></span><span>${esc(meta.label)}</span><strong>${typeRecords.length}</strong></div>
-      ${top.length ? `<div class="occupation-strip-list">${top.map(item=>`<div class="occupation-item is-clickable" role="button" tabindex="0" onclick="setAnalyticsFacetFilter('occupation','${encodeURIComponent(item.key)}')" title="${esc(item.cnae)} — ${esc(item.occupation)} — ${item.count} ocorrência(s)">
+      <div class="occupation-strip-head"><span class="occupation-strip-dot" style="background:${AGRAVO_HEX[key]}"></span><span>${esc(meta.label)}</span><strong>${typeRecords.length}</strong></div>
+      ${top.length ? `<div class="occupation-strip-list">${top.map(item=>`<div class="occupation-item" title="${esc(item.cnae)} — ${esc(item.occupation)} — ${item.count} ocorrência(s)">
         <div class="occupation-circle" style="color:${AGRAVO_HEX[key]}">${occupationIconSvg(item.occupation)}</div>
         <div class="occupation-cnae">${esc(item.cnae)}</div>
         <div class="occupation-name">${esc(item.occupation)}</div>
@@ -4742,7 +4831,7 @@ function renderChartObitos(list){
   const byType = {};
   Object.keys(AGRAVOS).forEach(k=> byType[k] = obitos.filter(r=>r.agravoType===k).length);
   return `<div class="chart-panel"><h3>Quantidade de Óbitos</h3>
-    <div class="obito-panel is-clickable" role="button" tabindex="0" onclick="setAnalyticsFacetFilter('obito','sim')">
+    <div class="obito-panel">
       <div class="big">${total}</div>
       <div class="lbl">${total? 'ÓBITO(S) REGISTRADO(S)' : '0 ÓBITOS REGISTRADOS'}</div>
     </div>
@@ -4774,16 +4863,67 @@ function toggleDigitacaoDrawer(){
 function digitacaoRecords(){
   return operationalRecords().filter(r=>r.status==='aguardando_digitacao' && r.pdfFicha);
 }
+async function ensureControleOccurrenceRecords(){
+  const missing = operationalControleFichas().filter(item=>!controleFichaLinkedOccurrence(item));
+  const pending=[];
+  for(const item of missing){
+    const record = {
+      id:uid(),
+      fichaNumero:String(item.numeroFicha || ''),
+      patientName:String(controleFichaPatientName(item) || item.patientName || item.nomePaciente || '').trim(),
+      agravoType:'grave',
+      status:'aguardando_digitacao',
+      localizacao:controleFichaDistributionLabel(item) || '',
+      distribuidoPara:controleFichaDistributionLabel(item) || '',
+      anoReferencia:OPERATIONAL_YEAR,
+      dataLancamento:String(item.dataDistribuicao || item.dataRecebimentoEpidemio || todayISO()),
+      createdAt:new Date().toISOString(),
+    };
+    if(!record.fichaNumero && !record.patientName) continue;
+    pending.push(record);
+  }
+  const failed=[];
+  for(let offset=0; offset<pending.length; offset+=50){
+    const result=await upsertRecordsRemoteBatch(pending.slice(offset,offset+50));
+    records.push(...result.saved);
+    failed.push(...result.failed);
+  }
+  if(failed.length){
+    console.warn('Sincronização do Controle terminou com falhas parciais', failed.map(item=>item.record.id));
+    showToast(`${failed.length} ficha(s) do Controle não foram sincronizadas. Tente novamente mais tarde.`);
+  }
+}
+function controleFichaLinkedOccurrence(item){
+  const byNumber = findLinkedRecord(item?.numeroFicha);
+  if(byNumber) return byNumber;
+  const name = controleFichaPatientName(item);
+  return name ? findLinkedRecordsByName(name)[0] || null : null;
+}
+function controleFichasSemOcorrencia(){
+  return operationalControleFichas().filter(item=>!controleFichaLinkedOccurrence(item));
+}
+function renderControleConferenciaBox(){
+  const controleTotal = operationalControleFichas().length;
+  const ocorrenciasTotal = operationalRecords().length;
+  const semOcorrencia = controleFichasSemOcorrencia();
+  const digitacao = digitacaoRecords();
+  const missingRows = semOcorrencia.map(item=>`<div class="controle-conferencia-row"><span><b>${esc(item.numeroFicha || 'S/N')}</b> — ${esc(controleFichaPatientName(item) || 'Nome não informado')}</span><small>Sem ocorrência correspondente no Dashboard</small></div>`).join('');
+  return `<div class="panel controle-conferencia-panel">
+    <div class="controle-conferencia-head"><div><h2>Conferência das fichas</h2><div class="hint">Comparação automática entre o Controle de Ficha e as ocorrências cadastradas no Dashboard Analítico.</div></div><span class="controle-conferencia-badge">${semOcorrencia.length} sem ocorrência</span></div>
+    <div class="controle-conferencia-stats"><div><b>${controleTotal}</b><span>Controle de Ficha</span></div><div><b>${ocorrenciasTotal}</b><span>Ocorrências no Dashboard</span></div><div><b>${digitacao.length}</b><span>Aguardando digitação</span></div></div>
+    ${semOcorrencia.length ? `<details class="controle-conferencia-details"><summary>Ver fichas que não aparecem no Dashboard <span>${semOcorrencia.length}</span></summary><div class="controle-conferencia-list">${missingRows}</div></details>` : '<div class="controle-conferencia-ok">Todas as fichas do Controle de Ficha possuem ocorrência correspondente no Dashboard.</div>'}
+  </div>`;
+}
 function renderDigitacaoDrawer(){
   if(!digitacaoDrawerOpen) return '';
-  const list = digitacaoRecords().slice().sort((a,b)=>{
-    const aText = String(a.fichaNumero ?? '').trim();
-    const bText = String(b.fichaNumero ?? '').trim();
-    const aMatch = aText.match(/\d+/);
-    const bMatch = bText.match(/\d+/);
-    const aHasNumber = Boolean(aMatch);
-    const bHasNumber = Boolean(bMatch);
-    if(aHasNumber && bHasNumber) return Number(aMatch[0]) - Number(bMatch[0]);
+  const list=digitacaoRecords().slice().sort((a,b)=>{
+    const aText=String(a.fichaNumero ?? '').trim();
+    const bText=String(b.fichaNumero ?? '').trim();
+    const aMatch=aText.match(/\d+/);
+    const bMatch=bText.match(/\d+/);
+    const aHasNumber=Boolean(aMatch);
+    const bHasNumber=Boolean(bMatch);
+    if(aHasNumber && bHasNumber) return Number(aMatch[0])-Number(bMatch[0]);
     if(aHasNumber !== bHasNumber) return aHasNumber ? -1 : 1;
     return 0;
   });
@@ -4792,7 +4932,6 @@ function renderDigitacaoDrawer(){
     <div class="digitacao-drawer-body">${list.length ? `<div class="selection-list">${list.map(r=>`<div class="selection-item" onclick="goTo('form','${esc(r.id)}')"><div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span><span class="selection-agravo">Local: ${esc(recordLocation(r))}</span></div><div class="selection-item-meta"><span class="badge amber">PDF anexado</span><span>Completar digitação →</span></div></div>`).join('')}</div>` : '<div class="empty-mini">Nenhuma ficha aguardando digitação.</div>'}</div>
   </div>`;
 }
-
 function renderDashboardSelection(list, filter){
   if(!filter) return '';
   const labels = {all:'Todas as fichas', red:'Fichas com pendência crítica', amber:'Fichas com pendência de atenção', green:'Fichas sem pendências'};
@@ -4808,31 +4947,12 @@ function renderFichaSelectionList(list){
     const level = worstLevel(computeAlerts(r));
     const alerts = computeAlerts(r).filter(a=>a.level!=='green');
     return `<div class="selection-item" onclick="goTo('form','${r.id}')">
-      <div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span></div>
+      <div class="selection-item-main"><span class="selection-ficha">${esc(fichaLabel(r))}</span><b>${esc(r.patientName||'(sem nome)')}</b><span class="selection-agravo">${esc(AGRAVOS[r.agravoType]?.label||'')}</span><span class="selection-agravo">Local: ${esc(recordLocation(r))}</span></div>
       <div class="selection-item-meta"><span class="badge ${level}"><span class="dot ${level}"></span>${level==='red'?'Crítico':level==='amber'?'Atenção':'OK'}</span><span>${fmtDate(r.dataNotificacao)}</span>${alerts.length?`<span>${alerts.length} alerta(s)</span>`:''}</div>
     </div>`;
   }).join('')}</div>`;
 }
 
-function renderConsultaAlertCard(r){
-  const alerts = computeAlerts(r);
-  const level = worstLevel(alerts);
-  if(level === 'green') return '';
-  const missing = getMissingDataLabels(r);
-  const distribution = controleFichaDistributionChip(findControleFichaByNumero(r.fichaNumero));
-  return `<div class="alert-card ${level}" onclick="goTo('form','${esc(r.id)}')">
-    <div class="alert-card-main">
-      <span class="dot ${level}"></span>
-      <div class="alert-card-content">
-        <div class="alert-card-head"><span class="alert-card-ficha">Nº da Ficha: ${esc(fichaLabel(r))} ${distribution}</span><span class="alert-card-type">${esc(AGRAVOS[r.agravoType]?.label||'')}</span></div>
-        <div class="alert-card-name">${esc(r.patientName||'(sem nome)')}</div>
-        <div class="alert-card-sub">Dados pendentes nesta ficha:</div>
-        <ul class="alert-missing">${missing.length ? missing.map(item=>`<li>${esc(item)}</li>`).join('') : '<li>Verificar pendências do registro</li>'}</ul>
-      </div>
-      <span class="alert-card-open">Abrir ficha&nbsp; →</span>
-    </div>
-  </div>`;
-}
 function renderDashboard(){
   const sourceRecords = operationalRecords();
   const withAlerts = sourceRecords.map(r=>({r, alerts:computeAlerts(r), level: null}));
@@ -4841,6 +4961,7 @@ function renderDashboard(){
   const nAmber = withAlerts.filter(x=>x.level==='amber').length;
   const nGreen = withAlerts.filter(x=>x.level==='green').length;
   const nDigitacao = digitacaoRecords().length;
+  const nCatPend = sourceRecords.filter(r=>!isImportedRecord(r) && r.agravoType==='grave' && r.foiEmitidaCAT==='2').length;
 
   if(!sourceRecords.length){
     return `<div class="panel"><div class="empty-state">
@@ -4851,7 +4972,22 @@ function renderDashboard(){
   }
 
   const alertCards = withAlerts.filter(x=>x.level!=='green')
-    .sort((a,b)=> (a.level==='red'?0:1)-(b.level==='red'?0:1)).map(x=>renderConsultaAlertCard(x.r));
+    .sort((a,b)=> (a.level==='red'?0:1)-(b.level==='red'?0:1)).map(x=>{
+      const missing = getMissingDataLabels(x.r);
+      const distribution = controleFichaDistributionChip(findControleFichaByNumero(x.r.fichaNumero));
+      return `<div class="alert-card ${x.level}" onclick="goTo('form','${x.r.id}')">
+        <div class="alert-card-main">
+          <span class="dot ${x.level}"></span>
+          <div class="alert-card-content">
+            <div class="alert-card-head"><span class="alert-card-ficha">Nº da Ficha: ${esc(fichaLabel(x.r))} ${distribution}</span><span class="alert-card-type">${esc(AGRAVOS[x.r.agravoType]?.label||'')}</span></div>
+            <div class="alert-card-name">${esc(x.r.patientName||'(sem nome)')}</div>
+            <div class="alert-card-sub">Dados pendentes nesta ficha:</div>
+            <ul class="alert-missing">${missing.length ? missing.map(item=>`<li>${esc(item)}</li>`).join('') : '<li>Verificar pendências do registro</li>'}</ul>
+          </div>
+          <span class="alert-card-open">Abrir ficha&nbsp; →</span>
+        </div>
+      </div>`;
+    });
 
   const dashboardSelection = dashboardCardFilter === 'all' ? sourceRecords : withAlerts.filter(x=>x.level===dashboardCardFilter).map(x=>x.r);
 
@@ -4864,8 +5000,9 @@ function renderDashboard(){
       <div class="stat-card digitacao-card is-clickable ${digitacaoDrawerOpen?'selected':''}" role="button" tabindex="0" title="Abrir fichas que possuem somente o PDF anexado" onclick="toggleDigitacaoDrawer()"><div class="n">${nDigitacao}</div><div class="l">Aguardando Digitação</div></div>
     </div>
     ${renderDashboardSelection(dashboardSelection, dashboardCardFilter)}
+    ${renderControleConferenciaBox()}
     <div class="panel">
-      <h2><span class="dot red"></span> Alertas ativos</h2>
+      <h2><span class="dot red"></span> Alertas ativos ${nCatPend? `<span style="font-weight:400;color:var(--text-muted);font-size:12px">— ${nCatPend} CAT não emitida(s)</span>`:''}</h2>
       ${alertCards.length ? alertCards.join('') : '<div style="color:var(--text-muted);font-size:13px">Nenhum alerta ativo. Todos os registros estão em dia.</div>'}
     </div>
     <div class="panel">
@@ -4881,7 +5018,7 @@ function renderMiniTable(list){
     ${list.map(r=>{
       const level = worstLevel(computeAlerts(r));
       return `<tr>
-        <td>${esc(r.patientName||'—')}</td>
+        <td><b>${esc(r.patientName||'—')}</b><div class="hint">${esc(recordLocation(r))}</div></td>
         <td>${esc(AGRAVOS[r.agravoType]?.label||'—')}</td>
         <td>${fmtDate(r.dataNotificacao)}</td>
         <td><span class="badge ${level}"><span class="dot ${level}"></span>${level==='red'?'Crítico':level==='amber'?'Atenção':'OK'}</span></td>
@@ -4918,10 +5055,142 @@ function getFilteredRecords(){
   });
   return list;
 }
+function batchNormalize(value){
+  return normalizeSearchText(String(value || '')).replace(/\s+/g,' ').trim();
+}
+function batchFichaKey(value){
+  const text=String(value||'').trim();
+  return /^\d+$/.test(text) ? String(Number(text)) : batchNormalize(text);
+}
+function parseBatchPdfName(name){
+  const base = String(name || '').split('/').pop().replace(/[\u00a0\u2007\u202f]/g,' ').trim();
+  if(!/\.pdf$/i.test(base)) return null;
+  // Aceita "20 - AT - NOME.pdf", "Ficha 20 - AT - NOME.pdf" e também
+  // fichas sem número: "AT - NOME.pdf". O número é reconhecido antes
+  // de qualquer validação do agravo, para não transformar uma ficha numerada
+  // em ficha sem número quando o nome do agravo for diferente.
+  const stem = base.replace(/\.pdf\s*$/i,'').trim();
+  const numberedMatch = stem.match(/^(?:ficha\s*|n[ºo°]?\s*)?[\[\(]?\s*(\d+)\s*[\]\)]?\s*(?:\.|-|–|—|_)\s*(.*)$/i);
+  const numberOnlyMatch = stem.match(/^(?:ficha\s*|n[ºo°]?\s*)?[\[\(]?\s*(\d+)\s*[\]\)]?\s*$/i);
+  const remainder = numberedMatch ? numberedMatch[2] : '';
+  if(!numberedMatch && numberOnlyMatch) return {number:String(Number(numberOnlyMatch[1])), patientName:'', agravoType:'grave', displayName:base};
+  if(!numberedMatch) return {number:'', patientName:'', agravoType:'grave', displayName:base};
+  const parts = remainder.split(/\s*(?:-|–|—|_)\s*/).map(part=>part.trim()).filter(Boolean);
+  const number = String(Number(numberedMatch[1]));
+  const typeToken = parts[0] || '';
+  const patientName = parts.length > 1 ? parts.slice(1).join(' - ').trim() : '';
+  const normalizedTypeToken = typeToken.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.\s/_-]/g, '');
+  const agravoType = normalizedTypeToken === 'ATMRT' ? 'mental' : normalizedTypeToken === 'ATMB' ? 'biologico' : normalizedTypeToken === 'LERDORT' ? 'lerdort' : 'grave';
+  return {number, patientName, agravoType, displayName:base};
+}
+function batchItemStatus(item){
+  if(!item.number) return 'bad';
+  if(item.matchCount > 1) return 'warn';
+  if(!item.record) return 'new';
+  if(item.record.pdfFicha) return 'warn';
+  return 'ok';
+}
+function updateBatchImportProgress(done,total){
+  batchImportState.progress = done;
+  const status = document.getElementById('batchImportProgress');
+  if(status) status.textContent = `Processando ${done} de ${total} ficha(s)…`;
+  const button = document.querySelector('#batchImportModal .btn-primary');
+  if(button) button.textContent = `Processando ${done} de ${total}…`;
+}
+function renderBatchImportModal(){
+  const items = batchImportState.items;
+  const ready = items.filter(x=>x.status==='ok' || x.status==='new').length;
+  const created = items.filter(x=>x.status==='new').length;
+  const warn = items.filter(x=>x.status==='warn').length;
+  const bad = items.filter(x=>x.status==='bad').length;
+  const rows = items.length ? items.map((item,index)=>{
+    const statusText = item.status==='ok' ? `Pronto para anexar à ficha ${item.record?.fichaNumero}` : item.status==='new' ? `Ficha ${item.number}: será criada como “Aguardando Digitação” e ficará disponível para digitação/complementação` : item.status==='warn' ? (item.matchCount > 1 ? `Há ${item.matchCount} registros com este número; não será associado automaticamente` : 'Já existe PDF anexado; não será substituído') : 'Número ou nome fora do padrão';
+    return `<label class="batch-import-item ${item.status}"><input type="checkbox" data-batch-index="${index}" ${item.status==='ok'||item.status==='new'?'checked':''} ${item.status==='ok'||item.status==='new'?'':'disabled'}><span><strong>${esc(item.displayName)}</strong><small>${esc(statusText)}</small></span></label>`;
+  }).join('') : '<div class="empty-state" style="padding:24px">Selecione um arquivo ZIP para analisar.</div>';
+  return `<div class="modal-bg" id="batchImportModal" onclick="if(event.target===this)closeBatchImport()"><div class="modal batch-import-modal">
+    <h3>Importar PDFs em lote</h3>
+    <p class="batch-import-help">O número da ficha são os <b>três primeiros dígitos</b> do nome, como <b>434_007703.pdf</b> ou <b>456 - AT - NOME.pdf</b>. Se a ficha já existir sem PDF, o arquivo será anexado. Se não existir, será criado um registro com somente o número da ficha e o PDF, com status “Aguardando Digitação”.</p>
+    <input id="batchZipInput" type="file" accept=".zip,application/zip" onchange="analyzeBatchZip(this)">
+    ${items.length ? `<div class="batch-import-summary"><span class="ok">${ready} prontos</span><span class="ok">${created} fichas novas</span><span class="warn">${warn} para conferir</span><span class="bad">${bad} sem correspondência</span></div><div class="batch-import-list">${rows}</div>` : ''}
+    ${batchImportState.processing ? `<div id="batchImportProgress" class="batch-import-progress" role="status" aria-live="polite">Processando ${batchImportState.progress || 0} de ${ready} ficha(s)…</div>` : ''}
+    <div class="row"><button type="button" class="btn btn-ghost" onclick="closeBatchImport()">Cancelar</button>${items.length ? `<button type="button" class="btn btn-primary" onclick="processBatchImport()" ${batchImportState.processing||!ready?'disabled':''}>${batchImportState.processing?'Importando...':`Anexar e criar selecionados (${ready})`}</button>` : ''}</div>
+  </div></div>`;
+}
+function openBatchImport(){ batchImportState={items:[],processing:false,progress:0}; document.body.insertAdjacentHTML('beforeend',renderBatchImportModal()); }
+function closeBatchImport(){ document.getElementById('batchImportModal')?.remove(); batchImportState={items:[],processing:false,progress:0}; }
+async function analyzeBatchZip(input){
+  const zipFile=input?.files?.[0];
+  if(!zipFile) return;
+  if(!window.JSZip){ showToast('Leitor ZIP indisponível. Recarregue a página e tente novamente.'); return; }
+  try{
+    const zip=await window.JSZip.loadAsync(zipFile);
+    const items=[];
+    for(const entry of Object.values(zip.files)){
+      if(entry.dir) continue;
+      const parsed=parseBatchPdfName(entry.name);
+      if(!parsed) continue;
+      const file=await entry.async('blob');
+      if(file.size > PDF_MAX_BYTES){ items.push({...parsed,file:null,record:null,status:'bad',displayName:`${parsed.displayName} (maior que ${formatFileSize(PDF_MAX_BYTES)})`}); continue; }
+      const pdf=new File([file], parsed.displayName, {type:'application/pdf'});
+      // O mesmo número de ficha pode existir em anos diferentes. O lote atual é de 2026,
+      // portanto a correspondência deve considerar exclusivamente as fichas operacionais do ano.
+      // Nunca associe um PDF sem número ao primeiro registro que também esteja sem número.
+      // PDFs sem número devem criar um novo registro com o nome extraído do arquivo.
+      const matches=parsed.number ? operationalRecords().filter(r=>batchFichaKey(r.fichaNumero)===batchFichaKey(parsed.number)) : [];
+      const record=matches.length===1 ? matches[0] : null;
+      const item={...parsed,file,record,matchCount:matches.length,status:'bad'};
+      item.status=batchItemStatus(item);
+      items.push(item);
+    }
+    batchImportState.items=items;
+    const modal=document.getElementById('batchImportModal'); if(modal) modal.outerHTML=renderBatchImportModal();
+    if(!items.length) showToast('Nenhum PDF com o padrão esperado foi encontrado no ZIP.');
+  }catch(error){ console.error('Falha ao ler ZIP',error); showToast('Não foi possível ler o arquivo ZIP.'); }
+}
+async function processBatchImport(){
+  const selected=[...document.querySelectorAll('#batchImportModal input[data-batch-index]:checked')].map(input=>batchImportState.items[Number(input.dataset.batchIndex)]).filter(item=>item?.status==='ok');
+  const selectedItems=[...document.querySelectorAll('#batchImportModal input[data-batch-index]:checked')].map(input=>batchImportState.items[Number(input.dataset.batchIndex)]).filter(item=>item && (item.status==='ok' || item.status==='new'));
+  if(!selectedItems.length) return;
+  batchImportState.processing=true;
+  batchImportState.progress=0;
+  const button=document.querySelector('#batchImportModal .btn-primary'); if(button){button.disabled=true;button.textContent='Importando...';}
+  let success=0; const created=[]; const attached=[]; const errors=[];
+  const total = selectedItems.length;
+  const pauseBetweenChunks = () => new Promise(resolve=>setTimeout(resolve, BATCH_PDF_PAUSE_MS));
+  updateBatchImportProgress(0,total);
+  for(let itemIndex=0; itemIndex<total; itemIndex++){
+    const item = selectedItems[itemIndex];
+    try{
+      const baseRecord=item.record || {id:uid(), fichaNumero:item.number, patientName:'', agravoType:'grave', status:'aguardando_digitacao', anoReferencia:OPERATIONAL_YEAR, createdAt:new Date().toISOString()};
+      const attachment=await uploadPdfAttachment(baseRecord.id,item.file);
+      const updated={...baseRecord,pdfFicha:attachment};
+      if(!await upsertRecordRemote(updated)) throw new Error('falha ao salvar a ficha');
+      const index=records.findIndex(r=>r.id===updated.id); if(index>=0) records[index]=updated;
+      else records.push(updated);
+      const reportNumber=item.number || updated.fichaNumero || 'não informado';
+      const reportName=item.patientName || updated.patientName || 'nome não informado';
+      success++; attached.push(`Ficha ${reportNumber} — ${reportName}`);
+      if(!item.record) created.push(`Ficha ${reportNumber} — ${reportName}`);
+    }catch(error){ errors.push(`${item.displayName}: ${error.message||'erro desconhecido'}`); }
+    finally{
+      updateBatchImportProgress(itemIndex + 1,total);
+      // Cada ficha faz upload + upsert. Ceda o event loop e faça uma pausa
+      // curta após cada bloco para evitar saturar Storage/PostgREST.
+      if((itemIndex + 1) % BATCH_PDF_CHUNK_SIZE === 0 && itemIndex + 1 < total) await pauseBetweenChunks();
+    }
+  }
+  batchImportState.processing=false;
+  closeBatchImport(); render();
+  showToast(`${success} PDF(s) anexado(s)${errors.length?`; ${errors.length} erro(s)`:''}.`);
+  showBatchResult({success,created,attached,errors});
+  if(errors.length) console.error('Erros da importação em lote',errors);
+}
+function showBatchResult(result){
+  const list=(title,items,cls='')=>items.length?`<div class="batch-result-section ${cls}"><b>${title}</b><ul>${items.map(item=>`<li>${esc(item)}</li>`).join('')}</ul></div>`:'';
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-bg" id="batchResultModal" onclick="if(event.target===this)this.remove()"><div class="modal batch-import-modal"><h3>Importação concluída</h3><p>${result.success} PDF(s) foram anexados. As fichas novas já estão cadastradas e precisam ser digitadas/completadas.</p>${list('Fichas criadas automaticamente',result.created,'ok')}${list('PDFs anexados',result.attached)}${list('Ocorrências que exigem atenção',result.errors,'bad')}<div class="row"><button type="button" class="btn btn-primary" onclick="document.getElementById('batchResultModal')?.remove()">Entendi</button></div></div></div>`);
+}
 function renderConsulta(){
   const all = getFilteredRecords();
-  const consultaAlertRecords = all.filter(r=>worstLevel(computeAlerts(r))!=='green');
-  const consultaAlerts = consultaAlertRecords.length ? `<div class="consulta-alertas"><div class="consulta-alertas-heading"><div><h2><span class="dot red"></span> Alertas ativos</h2><div class="hint">Fichas com pendências dentro dos filtros aplicados.</div></div><span class="badge red">${consultaAlertRecords.length} ficha(s)</span></div>${consultaAlertRecords.map(renderConsultaAlertCard).join('')}</div>` : '';
   const totalPages = Math.max(1, Math.ceil(all.length / tableState.pageSize));
   tableState.page = Math.min(tableState.page, totalPages);
   const pageItems = all.slice((tableState.page-1)*tableState.pageSize, tableState.page*tableState.pageSize);
@@ -4941,6 +5210,7 @@ function renderConsulta(){
         <span>Pesquise pelo nome completo ou parte dele.</span>
       </div>
     </div>
+    ${renderBatchPdfImport()}
     <div class="toolbar">
       <div class="search-box">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
@@ -4960,16 +5230,18 @@ function renderConsulta(){
         <option value="amber" ${tableState.filterStatus==='amber'?'selected':''}>Atenção</option>
         <option value="green" ${tableState.filterStatus==='green'?'selected':''}>OK</option>
       </select>
-      <button class="btn btn-ghost btn-sm" onclick="exportExcel()">
+      <button class="btn btn-primary btn-sm" onclick="openBatchImport()" title="Associar PDFs a fichas pelo número no nome do arquivo">
+        Importar PDFs em lote
+      </button>
+      <button class="btn btn-ghost btn-sm" onclick="exportExcel()" title="Baixar backup completo em Excel com todas as fichas e abas do modelo">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
-        Exportar Excel
+        Baixar backup Excel
       </button>
     </div>
-    ${consultaAlerts}
     ${all.length ? `<table>
       <thead><tr>
         <th data-sort="fichaNumero">Nº da Ficha${sortIcon('fichaNumero')}</th>
-        <th data-sort="patientName">Nome${sortIcon('patientName')}</th>
+        <th data-sort="patientName">Nome / localização${sortIcon('patientName')}</th>
         <th data-sort="agravoType">Agravo${sortIcon('agravoType')}</th>
         <th data-sort="dataNotificacao">Data Notif.${sortIcon('dataNotificacao')}</th>
         <th data-sort="municipioNotificacao">Município${sortIcon('municipioNotificacao')}</th>
@@ -4980,21 +5252,22 @@ function renderConsulta(){
       <tbody>
         ${pageItems.map(r=>{
           const level = worstLevel(computeAlerts(r));
-          const finalizedByEpidemiology = recordIsFinalizedByEpidemiology(r);
-          const statusLabel = finalizedByEpidemiology ? 'Finalizado — Epidemiologia' : (STATUS_OPTIONS.find(s=>s[0]===r.status)||[,'—'])[1];
+          const missing = getMissingDataLabels(r);
+          const statusLabel = (STATUS_OPTIONS.find(s=>s[0]===r.status)||[,'—'])[1];
           return `<tr>
             <td style="font-family:var(--font-mono);color:var(--text-muted)">${esc(fichaLabel(r))}</td>
-            <td><b>${esc(r.patientName||'—')}</b></td>
+            <td><b>${esc(r.patientName||'—')}</b><div class="hint">Local: ${esc(recordLocation(r))}</div></td>
             <td>${esc(AGRAVOS[r.agravoType]?.label||'—')}</td>
             <td>${fmtDate(r.dataNotificacao)}</td>
             <td>${esc(r.municipioNotificacao||'—')}</td>
-            <td><span class="badge ${finalizedByEpidemiology || r.status==='finalizado'?'green':'amber'}">${esc(statusLabel)}</span></td>
-            <td><span class="badge ${level}"><span class="dot ${level}"></span>${level==='red'?'Crítico':level==='amber'?'Atenção':'OK'}</span></td>
+            <td><span class="badge ${r.status==='finalizado'?'green':'amber'}">${esc(statusLabel)}</span></td>
+            <td><span class="badge ${level}"><span class="dot ${level}"></span>${level==='red'?'Crítico':level==='amber'?'Atenção':'OK'}</span>${missing.length ? `<ul class="consulta-pendencias">${missing.map(item=>`<li>${esc(item)}</li>`).join('')}</ul>` : ''}</td>
             <td><div class="row-actions" style="justify-content:flex-end">
               <button class="btn-icon" title="Visualizar" onclick="goTo('print','${r.id}')">${iconEye()}</button>
               <button class="btn-icon" title="Editar" onclick="goTo('form','${r.id}')">${iconEdit()}</button>
               <button class="btn-icon" title="Duplicar" onclick="duplicateRecord('${r.id}')">${iconCopy()}</button>
               <button class="btn-icon" title="Imprimir" onclick="printRecord('${r.id}')">${iconPrint()}</button>
+              ${r.pdfFicha ? `<button class="btn-icon pdf-action" title="Abrir PDF da ficha" onclick="openPdfForRecord('${esc(r.id)}')">PDF</button>` : ''}
               <button class="btn-icon" title="Excluir" onclick="askDelete('${r.id}')">${iconTrash()}</button>
             </div></td>
           </tr>`;
@@ -5039,15 +5312,13 @@ async function confirmDelete(){
   const idToDelete = pendingDeleteId;
   const backup = records.find(r=>r.id===idToDelete);
   records = records.filter(r=>r.id!==idToDelete);
-  linkedRecordIndex = null;
-  operationalControleFichasCache = null;
   pendingDeleteId=null;
   render();
   const ok = await deleteRecordRemote(idToDelete);
   if(ok){
     showToast('Registro excluído.');
   } else {
-    if(backup){ records.push(backup); linkedRecordIndex = null; operationalControleFichasCache = null; }
+    if(backup) records.push(backup);
     render();
     showToast('Erro: não foi possível excluir no banco de dados. Verifique a conexão e tente novamente.');
   }
@@ -5057,16 +5328,12 @@ async function duplicateRecord(id){
   if(!orig) return;
   const copy = {...orig, id: uid(), fichaNumero: '', patientName: orig.patientName + ' (cópia)', createdAt: new Date().toISOString(), pdfFicha: null};
   records.push(copy);
-  linkedRecordIndex = null;
-  operationalControleFichasCache = null;
   render();
   const ok = await upsertRecordRemote(copy);
   if(ok){
     showToast('Registro duplicado. Informe o novo Nº da Ficha.');
   } else {
     records = records.filter(r=>r.id!==copy.id);
-    linkedRecordIndex = null;
-    operationalControleFichasCache = null;
     render();
     showToast('Erro: não foi possível duplicar no banco de dados. Verifique a conexão e tente novamente.');
   }
@@ -5154,7 +5421,6 @@ const EXPORT_COMMON_COLS = [
   ['Zona', r=>labelOf([['1','Urbana'],['2','Rural'],['3','Periurbana'],['9','Ignorado']], r.resZona)],
   ['Ponto de Referência (Residência)', r=>r.resPontoReferencia||''],
   ['Telefone (Residência)', r=>r.resTelefone||''],
-  ['País', r=>r.resPais||''],
   ['Ocupação (Profissão)', r=>r.ocupacao||''],
   ['Nº do SINAN', r=>r.numeroSinan||''],
   ['CBO', r=>r.cbo||''],
@@ -5285,42 +5551,78 @@ const BIOLOGICO_COLS = [
   ['Nome do Digitador', r=>r.investigadorAssinatura||''],
 ];
 
-let xlsxPromise = null;
-async function exportExcel(){
-  const list = getFilteredRecords();
-  if(!list.length){ showToast('Nada para exportar.'); return; }
-  if(typeof XLSX === 'undefined'){
-    showToast('Preparando a exportação do Excel...');
-    if(!xlsxPromise) xlsxPromise = loadVisatExternalScript('https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js','XLSX');
-    try{ await xlsxPromise; }
-    catch(error){
-      xlsxPromise = null;
-      console.error('Falha ao carregar a biblioteca de Excel', error);
-      showToast('Não foi possível carregar a biblioteca de exportação. Verifique sua conexão com a internet.');
-      return;
+function backupExcelCellStyle(kind){
+  const palette = {
+    title:{fill:{fgColor:{rgb:'0D3B3E'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:14},alignment:{horizontal:'center',vertical:'center'}},
+    header:{fill:{fgColor:{rgb:'176B6E'}},font:{bold:true,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',vertical:'center',wrapText:true},border:{bottom:{style:'medium',color:{rgb:'0D3B3E'}}}},
+    subheader:{fill:{fgColor:{rgb:'DDEFEA'}},font:{bold:true,color:{rgb:'0D3B3E'}},alignment:{vertical:'center',wrapText:true}},
+    body:{alignment:{vertical:'top',wrapText:true},border:{bottom:{style:'thin',color:{rgb:'D9E3E1'}}}},
+    accent:{fill:{fgColor:{rgb:'EAF5F2'}},font:{bold:true,color:{rgb:'0D3B3E'}}},
+  };
+  return palette[kind] || palette.body;
+}
+
+function styleBackupSheet(ws, opts={}){
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+  const headerRow = opts.headerRow ?? 1;
+  const titleRow = opts.titleRow ?? 0;
+  for(let r=range.s.r; r<=range.e.r; r++){
+    for(let c=range.s.c; c<=range.e.c; c++){
+      const cell = ws[XLSX.utils.encode_cell({r,c})];
+      if(!cell) continue;
+      cell.s = backupExcelCellStyle(r===titleRow ? 'title' : r===headerRow ? 'header' : 'body');
     }
   }
-  const sheetsDef = [
-    {key:'grave', name:'Acidente Grave', cols: GRAVE_COLS},
-    {key:'biologico', name:'Exposição Biológica', cols: BIOLOGICO_COLS},
-    {key:'mental', name:'Transtorno Mental', cols: MENTAL_COLS},
-    {key:'lerdort', name:'LER-DORT', cols: LERDORT_COLS},
-  ];
+  if(opts.titleRow !== undefined) ws['!rows'] = [{hpt:28},{hpt:34}];
+  if(opts.headerRow !== undefined && opts.titleRow === undefined) ws['!rows'] = [{hpt:34}];
+  ws['!freeze'] = {xSplit:0,ySplit:headerRow+1};
+  if(range.e.r >= headerRow) ws['!autofilter'] = {ref:XLSX.utils.encode_range({s:{r:headerRow,c:range.s.c},e:range.e})};
+}
+
+function backupValue(value){
+  if(value===undefined || value===null) return '';
+  if(Array.isArray(value)) return value.join(', ');
+  if(typeof value === 'object') return value.name || JSON.stringify(value);
+  return value;
+}
+
+function exportExcel(){
+  const list = recordsForYear(OPERATIONAL_YEAR).filter(r=>r && !r.controleFicha);
+  if(!list.length){ showToast('Não há fichas cadastradas para gerar o backup.'); return; }
+  if(typeof XLSX === 'undefined'){ showToast('Não foi possível carregar a biblioteca de exportação. Verifique sua conexão com a internet.'); return; }
   const wb = XLSX.utils.book_new();
-  let anySheet = false;
-  sheetsDef.forEach(sd=>{
-    const recs = list.filter(r=>r.agravoType===sd.key);
-    const allCols = [...EXPORT_COMMON_COLS, ...sd.cols];
-    const header = allCols.map(c=>c[0]);
-    const data = recs.map(r => allCols.map(c => { const v = c[1](r); return (v===undefined||v===null) ? '' : v; }));
-    const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
-    ws['!cols'] = header.map(()=>({wch:24}));
-    XLSX.utils.book_append_sheet(wb, ws, sd.name);
-    if(recs.length) anySheet = true;
-  });
-  if(!anySheet){ showToast('Nenhum registro nos tipos de agravo disponíveis para exportação.'); }
-  XLSX.writeFile(wb, 'notificacoes_acidentes_trabalho.xlsx');
-  showToast('Excel exportado com sucesso.');
+  const typeLabel = key=>AGRAVOS[key]?.label || key;
+  const byType = key=>list.filter(r=>r.agravoType===key);
+  const val = (r,key, fallback='') => backupValue(r?.[key] ?? fallback);
+  const dt = (r,key) => fmtDate(r?.[key]);
+  const idade = r => { const a=calcIdade(r?.dataNascimento); return a==null ? val(r,'idade') : a; };
+  const status = r => labelOf(STATUS_OPTIONS, r.status);
+  const cat = r => labelOf(CAT_OPTIONS, r.foiEmitidaCAT);
+  const marked = (r,key,label) => Array.isArray(r?.[key]) && r[key].includes(label) ? 'SIM' : 'NÃO';
+  const addSheet = (name, headers, rows, title)=>{
+    const ws = XLSX.utils.aoa_to_sheet([[title], headers, ...rows]);
+    ws['!cols'] = headers.map(h=>({wch:Math.min(42,Math.max(14,String(h).length+3))}));
+    styleBackupSheet(ws, {titleRow:0,headerRow:1});
+    XLSX.utils.book_append_sheet(wb, ws, name.slice(0,31));
+  };
+  const graveHeaders = ['STATUS INVESTIGAÇÃO','DIA DE LANÇAMENTO','LANÇADO POR :','Nº DA FICHA','DATA DO ACIDENTE','DATA DA NOTIFICAÇÃO','ANO','MÊS','UNIDADE NOTIFICADORA','NOME','DATA DE NASCIMENTO','IDADE','SEXO','COR/RAÇA','ESCOLARIDADE','MUNICIPIO DE RESIDÊNCIA','TELEFONE','SINAN','CBO','OCUPAÇÃO','SITUAÇÃO NO MERCADO DE TRABALHO','LOCAL DO ACIDENTE','EMPRESA','CNAE','ATIVIDADE ECONOMICA','MUNICIPIO DA EMPRESA','TIPO DE ACIDENTE','1 - OLHO','2 - CABEÇA','3 - PESCOÇO','4 - TORÁX','5 - ABDOME','6 - MÃO','7 - MEMBRO SUPERIOR','8 - MEMBRO INFERIOR','9 - PÉ','10 - TODO O CORPO','11 - OUTRO','CID DO ACIDENTE','CID DA LESÃO','CAT'];
+  const graveRows = byType('grave').map(r=>[status(r),dt(r,'dataLancamento'),val(r,'investigadorAssinatura'),val(r,'fichaNumero'),dt(r,'dataAcidente'),dt(r,'dataNotificacao'),val(r,'ano'),val(r,'mes'),val(r,'unidadeSaude'),val(r,'patientName'),dt(r,'dataNascimento'),idade(r),val(r,'sexo'),val(r,'racaCor'),val(r,'escolaridade'),val(r,'resMunicipio'),val(r,'resTelefone'),val(r,'numeroSinan'),val(r,'cbo'),val(r,'ocupacao'),val(r,'situacaoMercado'),val(r,'localAcidente'),val(r,'nomeEmpresa'),val(r,'cnae'),val(r,'atividadeEconomica'),val(r,'empMunicipio'),val(r,'tipoAcidente'),...PARTES_CORPO.map(p=>marked(r,'partesCorpo',p)),val(r,'causaCID10'),val(r,'diagnosticoLesaoCID10'),cat(r)]);
+  const mentalHeaders = ['DATA DE DEVOLUÇÃO PARA EPIDEMIOLOGIA','DIA DE LANÇAMENTO','LANÇADO POR :','Nº DA FICHA','UNIDADE NOTIFICADORA','DATA DO DIAGNOSTICO','DATA DA NOTIFICAÇÃO','ANO','MÊS','NOME','DATA DE NASCIMENTO','IDADE','SEXO','GESTANTE','COR/RAÇA','ESCOLARIDADE','MUNICIPIO DE RESIDÊNCIA','TELEFONE','SINAN','CBO','OCUPAÇÃO','SITUAÇÃO NO MERCADO DE TRABALHO','EMPRESA','CNAE','ATIVIDADE ECONOMICA','MUNICIPIO DA EMPRESA','O EMPREGADOR É EMPRESA TERCERIZADA','REGIME DE TRATAMENTO','DIAGNOSTICO ESPECIFICO','HABITOS','HABITO DE FUMAR','TEMPO DE EXPOSIÇÃO AO TABACO','CONDUTA GERAL','HÁ OU HOUVE OUTROS TRABALHADORES COM A MESMA DOENÇA NO LOCAL DE TRABALHO','O PACIENTE FOI ENCAMINHADO PARA O CAPES OU OUTRO TRATAMENTO DE TRANSTORNOS MENTAIS','EVOLUÇÃO DO CASO','CAT'];
+  const mentalRows = byType('mental').map(r=>[val(r,'dataDevolucaoEpidemio'),dt(r,'dataLancamento'),val(r,'investigadorAssinatura'),val(r,'fichaNumero'),val(r,'unidadeSaude'),dt(r,'dataDiagnosticoMental'),dt(r,'dataNotificacao'),val(r,'ano'),val(r,'mes'),val(r,'patientName'),dt(r,'dataNascimento'),idade(r),val(r,'sexo'),val(r,'gestante'),val(r,'racaCor'),val(r,'escolaridade'),val(r,'resMunicipio'),val(r,'resTelefone'),val(r,'numeroSinan'),val(r,'cbo'),val(r,'ocupacao'),val(r,'situacaoMercado'),val(r,'nomeEmpresa'),val(r,'cnae'),val(r,'atividadeEconomica'),val(r,'empMunicipio'),val(r,'empregadorTerceirizada'),val(r,'regimeTratamentoMental'),val(r,'diagnosticoCID10'),val(r,'habitos'),val(r,'habitoFumar'),val(r,'tempoExposicaoTabaco'),val(r,'condutaGeralMental'),val(r,'outrosTrabalhadoresMesmaDoenca'),val(r,'encaminhadoCAPS'),val(r,'evolucaoCaso'),cat(r)]);
+  const bioHeaders = ['DATA DE DEVOLUÇÃO PARA EPIDEMIOLOGIA','DIA DE LANÇAMENTO','LANÇADO POR :','Nº DA FICHA','DATA DO ACIDENTE','DATA DA NOTIFICAÇÃO','ANO','MÊS','UNIDADE NOTIFICADORA','NOME','DATA DE NASCIMENTO','IDADE','SEXO','COR/RAÇA','ESCOLARIDADE','MUNICIPIO DE RESIDÊNCIA','TELENOFE','SINAN','CBO','OCUPAÇÃO','SITUAÇÃO NO MERCADO DE TRABALHO','EMPRESA','CNAE','ATIVIDADE ECONOMICA','MUNICIPIO DA EMPRESA','EMPRESA TERCERIZADA','TIPO DE EXPOSIÇÃO','MATERIAL ORGANICO','CIRCUNSTANCIAS DO ACIDENTE','AGENTE','USO DO EPI','SITUAÇÃO VACINAL DO ACIDENTADO HEPATITE B','ANTI-HIV','HBSAG','ANTI-HBS','ANTI-HCV','DADOS DO PACIENTE FONTE','HBSAG.','ANTI-HIV.','ANTI-HBC.','ANTI-HCV.','CONDUTA NO MOMENTO DO ACIDENTE','EVOLUÇÃO DO CASO','CAT','STATUS INVESTIGAÇÃO'];
+  const bioRows = byType('biologico').map(r=>[val(r,'dataDevolucaoEpidemio'),dt(r,'dataLancamento'),val(r,'investigadorAssinatura'),val(r,'fichaNumero'),dt(r,'dataAcidenteBio'),dt(r,'dataNotificacao'),val(r,'ano'),val(r,'mes'),val(r,'unidadeSaude'),val(r,'patientName'),dt(r,'dataNascimento'),idade(r),val(r,'sexo'),val(r,'racaCor'),val(r,'escolaridade'),val(r,'resMunicipio'),val(r,'resTelefone'),val(r,'numeroSinan'),val(r,'cbo'),val(r,'ocupacao'),val(r,'situacaoMercado'),val(r,'nomeEmpresa'),val(r,'cnae'),val(r,'atividadeEconomica'),val(r,'empMunicipio'),val(r,'empregadorTerceirizada'),val(r,'tipoExposicao'),val(r,'materialOrganico'),val(r,'circunstanciaAcidente'),val(r,'agenteBiologico'),val(r,'usoEPI'),val(r,'situacaoVacinalHepB'),val(r,'examAntiHIV'),val(r,'examHbsAg'),val(r,'examAntiHBs'),val(r,'examAntiHCV'),val(r,'pacienteFonteConhecida'),val(r,'fonteHbsAg'),val(r,'fonteAntiHIV'),val(r,'fonteAntiHBc'),val(r,'fonteAntiHCV'),val(r,'condutaMomentoAcidente'),val(r,'evolucaoCaso'),cat(r),status(r)]);
+  const ldHeaders = ['DATA DE DEVOLUÇÃO PARA EPIDEMIOLOGIA','STATUS DA INVESTIGAÇÃO','DIA DE LANÇAMENTO','LANÇADO POR :','Nº DA FICHA','CODIGO CID','DATA DO DIAGNOSTICO','DATA DA NOTIFICAÇÃO','ANO','MÊS','UNIDADE NOTIFICADORA','NOME','DATA DE NASCIMENTO','IDADE','SEXO','GESTANTE','COR/RAÇA','ESCOLARIDADE','MUNICIPIO DE RESIDÊNCIA','TELEFONE','SINAN','CBO','OCUPAÇÃO','SITUAÇÃO NO MERCADO DE TRABALHO','EMPRESA','CNAE','ATIVIDADE ECONOMICA','MUNICIPIO DA EMPRESA','O EMPREGADO É DE EMPRESA TERCERIZADA','AGRAVOS ASSOCIADOS','REGIME DE TRATAMENTO','SINAIS E SINTOMAS','LIMITAÇÃO E INCAPACIDADE PARA EXERCICIO DE TAREFAS','O PACIENTE ESTÁ EXPOSTO EM SEU LOCAL DE TRABALHO À:','DIAGNOSTICO ESPECIFICO (CID)','HOUVE AFASTAMENTO DO TRABALHO PARA TRATAMENTO','COM AFASTAMENTO DO TRABALHO','HÁ OU HOUVE OUTROS TRABALHADORES COM A MESMA DOENÇA NO LOCAL DE TRABALHO','CONDUTA GERAL','EVOLUÇÃO DO CASO','CAT'];
+  const ldRows = byType('lerdort').map(r=>[val(r,'dataDevolucaoEpidemio'),status(r),dt(r,'dataLancamento'),val(r,'investigadorAssinatura'),val(r,'fichaNumero'),val(r,'codigoCID')||val(r,'diagnosticoCID10'),dt(r,'dataDiagnosticoLD'),dt(r,'dataNotificacao'),val(r,'ano'),val(r,'mes'),val(r,'unidadeSaude'),val(r,'patientName'),dt(r,'dataNascimento'),idade(r),val(r,'sexo'),val(r,'gestante'),val(r,'racaCor'),val(r,'escolaridade'),val(r,'resMunicipio'),val(r,'resTelefone'),val(r,'numeroSinan'),val(r,'cbo'),val(r,'ocupacao'),val(r,'situacaoMercado'),val(r,'nomeEmpresa'),val(r,'cnae'),val(r,'atividadeEconomica'),val(r,'empMunicipio'),val(r,'empregadorTerceirizada'),val(r,'agravosAssociados'),val(r,'regimeTratamentoLD'),val(r,'sinaisSintomas'),val(r,'limitacaoIncapacidade'),val(r,'exposicaoTrabalho'),val(r,'diagnosticoCID10'),val(r,'houveAfastamentoTratamento'),val(r,'tempoAfastamentoTrabalho'),val(r,'outrosTrabalhadoresMesmaDoenca'),val(r,'condutaGeral'),val(r,'evolucaoCaso'),cat(r)]);
+  addSheet('Dashboard',['Indicador','Quantidade'],[['Total de fichas',list.length],...Object.keys(AGRAVOS).map(k=>[typeLabel(k),byType(k).length])],'DASHBOARD CONTROLE DE ACIDENTES E INCIDENTES');
+  addSheet('PLANILHA ENTRADA',['FICHA INVESTIGADA','PLANILHADO','AGRAVO','Nº DA FICHA','NOME'],list.map(r=>[status(r),val(r,'planilhado','NÃO'),r.agravoType==='grave'?'AT':r.agravoType==='biologico'?'ATMB':r.agravoType==='mental'?'ATMRT':'LER/DORT',val(r,'fichaNumero'),val(r,'patientName')]),'PLANILHA ENTRADA');
+  addSheet('ACIDENTE DO TRABALHO',graveHeaders,graveRows,'ACIDENTE DO TRABALHO');
+  addSheet('TRANSTORNO MENTAL',mentalHeaders,mentalRows,'TRANSTORNO MENTAL');
+  addSheet('EXPOSIÇÃO MATERIAL BIO',bioHeaders,bioRows,'EXPOSIÇÃO A MATERIAL BIOLOGICO');
+  addSheet('LER DORT',ldHeaders,ldRows,'LER DORT');
+  const devolvidas = list.filter(r=>r.dataDevolucaoEpidemio);
+  addSheet('FOLHA DE ENVIO EPIDEMIO',['AGRAVO','Nº DA FICHA','NOME','DATA DE RECEBIMENTO DA DEVOLUÇÃO DAS FICHAS','ASSINATURA'],devolvidas.map(r=>[r.agravoType==='grave'?'AT':r.agravoType==='biologico'?'ATMB':r.agravoType==='mental'?'ATMRT':'LER/DORT',val(r,'fichaNumero'),val(r,'patientName'),dt(r,'dataDevolucaoEpidemio'),'']), 'TRÂMITE DE NOTIFICAÇÕES DEVOLVIDAS PARA EPIDEMIOLOGIA - ACIDENTE DE TRABALHO');
+  XLSX.writeFile(wb, `PLANILHAMACRO2026-FICHADEACIDENTESDETRABALHO_${new Date().toISOString().slice(0,10)}.xlsx`);
+  showToast(`Backup no padrão da planilha anexada gerado com ${list.length} ficha(s).`);
 }
 
 /* ============================= FORMULÁRIO ============================= */
@@ -5346,6 +5648,37 @@ function field(opts){
     ${hint?`<span class="hint">${esc(hint)}</span>`:''}
     ${duplicateHint}
   </div>`;
+}
+const UNIDADE_SAUDE_OPTIONS = ['UPA','PRONTO SOCORRO - PSMRO','HOSPITAL MUNICIPAL DRA. NOELMA MONTEIRO','ESF CIDADE PRAIANA','VISAT','OUTRO'];
+function unidadeSaudeField(){
+  const current = String(formData.unidadeSaude || '').trim();
+  const isPreset = UNIDADE_SAUDE_OPTIONS.slice(0,-1).includes(current);
+  const selectValue = isPreset ? current : (current ? 'OUTRO' : '');
+  const otherValue = String(formData.unidadeSaudeOutro || (selectValue === 'OUTRO' ? current : '')).trim();
+  return `<div class="field span2">
+    <label>Unidade de Saúde (ou outra fonte notificadora) <span class="req">*</span></label>
+    <select data-k="unidadeSaude" required onchange="toggleOutraUnidadeSaude(this.value)">
+      <option value="">Selecione...</option>
+      ${UNIDADE_SAUDE_OPTIONS.map(option=>`<option value="${esc(option)}" ${selectValue===option?'selected':''}>${esc(option)}</option>`).join('')}
+    </select>
+    <div id="unidadeSaudeOutroWrap" class="field-inline-other" style="${selectValue==='OUTRO'?'':'display:none'}">
+      <label for="unidadeSaudeOutro">Digite a unidade de saúde</label>
+      <input id="unidadeSaudeOutro" type="text" data-k="unidadeSaudeOutro" value="${esc(otherValue)}" placeholder="Informe a unidade de saúde" oninput="formData.unidadeSaudeOutro=this.value;formData.unidadeSaude=this.value">
+    </div>
+  </div>`;
+}
+function toggleOutraUnidadeSaude(value){
+  const wrap = document.getElementById('unidadeSaudeOutroWrap');
+  const input = document.getElementById('unidadeSaudeOutro');
+  const isOther = value === 'OUTRO';
+  if(wrap) wrap.style.display = isOther ? '' : 'none';
+  if(isOther){
+    formData.unidadeSaudeOutro = String(input?.value || formData.unidadeSaudeOutro || '').trim();
+    formData.unidadeSaude = formData.unidadeSaudeOutro;
+  }else{
+    formData.unidadeSaudeOutro = '';
+    formData.unidadeSaude = value || '';
+  }
 }
 function cepField(){
   const val = formData.resCep ?? '';
@@ -5408,13 +5741,11 @@ function renderPdfUpload(){
   const canPreview = Boolean(selected || attachment);
   const status = pdfAttachmentState.error
     ? pdfAttachmentState.error
-    : pdfAutoState.processing
-      ? 'Leitura automática em andamento...'
-      : selected
-        ? `PDF selecionado: ${selected.name} (${formatFileSize(selected.size)}). Será enviado ao salvar.`
-        : attachment
-          ? `PDF anexado: ${attachment.name || 'ficha.pdf'}. O vínculo será mantido ao salvar.`
-          : 'Faça o upload do PDF oficial da ficha para anexá-lo e iniciar a leitura automática.';
+    : selected
+      ? `PDF selecionado: ${selected.name} (${formatFileSize(selected.size)}). Será enviado ao salvar.`
+      : attachment
+        ? `PDF anexado: ${attachment.name || 'ficha.pdf'}. O vínculo será mantido ao salvar.`
+        : 'Faça o upload do PDF oficial da ficha para anexá-lo. A leitura deverá ser feita manualmente.';
   return `<div class="field pdf-upload span2">
     <label for="pdfFichaInput">Arquivo PDF da Ficha</label>
     <div class="pdf-actions no-print">
@@ -5423,7 +5754,6 @@ function renderPdfUpload(){
       <button type="button" class="btn btn-ghost btn-sm pdf-view-btn" onclick="previewCurrentPdf()" ${canPreview?'':'disabled'}>${pdfPreviewState.open?'Fechar visualização':'Visualizar ficha'}</button>
     </div>
     <span class="hint ${pdfAttachmentState.error?'pdf-error':''}" id="pdfFichaStatus">${esc(status)}</span>
-    ${renderPdfAutoSummary()}
   </div>`;
 }
 function formatFileSize(bytes){
@@ -5464,10 +5794,8 @@ function handlePdfInput(input){
   }
   pdfAttachmentState.file = file;
   pdfAttachmentState.error = '';
-  pdfAutoState = {active:true, processing:true, filled:[], unresolved:[], warnings:[], text:''};
-  setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). Iniciando a leitura automática...`);
-  refreshPdfAutoSummary();
-  readAndFillPdf(file);
+  setPdfStatus(`PDF selecionado: ${file.name} (${formatFileSize(file.size)}). Será enviado ao salvar.`);
+  refreshPdfPreviewPanel();
 }
 
 const PDF_AUTOFILL_FIELDS = {
@@ -6187,14 +6515,20 @@ function renderPdfPreviewPanel(){
   const isImage = /^image\//i.test(pdfPreviewState.kind || '');
   const content = isImage
     ? `<img class="pdf-preview-image" src="${esc(pdfPreviewState.url)}" alt="Visualização da ficha ${esc(pdfPreviewState.name || '')}">`
-    : `<iframe class="pdf-preview-frame" src="${esc(pdfPreviewState.url)}" title="Visualização da ficha" loading="eager"></iframe>`;
+    : `<iframe class="pdf-preview-frame" src="${esc(pdfPreviewState.url)}" title="Visualização da ficha" loading="eager"></iframe><a class="pdf-preview-fallback" href="${esc(pdfPreviewState.url)}" target="_blank" rel="noopener">Abrir PDF em nova aba</a>`;
   return `<div class="pdf-preview-panel" id="pdfPreviewPanel">
     <div class="pdf-preview-header"><strong>Visualização da ficha</strong><span>${esc(pdfPreviewState.name || 'Arquivo anexado')}</span><button type="button" class="btn btn-ghost btn-sm pdf-preview-close" onclick="closePdfPreview()">Fechar</button></div>
     ${content}
   </div>`;
 }
+function setPdfPreviewLayout(collapsed){
+  const app = document.querySelector('.app');
+  if(app) app.classList.toggle('pdf-preview-sidebar-collapsed', Boolean(collapsed));
+}
 function refreshPdfPreviewPanel(){
   const host = document.getElementById('pdfPreviewPanelHost');
+  // O iframe do visualizador nativo pode iniciar seleção de texto enquanto o
+  // painel ainda está sendo inserido/removido. Só mutamos um host conectado.
   if(host?.isConnected) host.innerHTML = renderPdfPreviewPanel();
   const button = document.querySelector('.pdf-view-btn');
   if(button){
@@ -6202,10 +6536,6 @@ function refreshPdfPreviewPanel(){
     button.textContent = pdfPreviewState.open ? 'Fechar visualização' : 'Visualizar ficha';
   }
   setPdfPreviewLayout(pdfPreviewState.open);
-}
-function setPdfPreviewLayout(collapsed){
-  const app = document.querySelector('.app');
-  if(app) app.classList.toggle('pdf-preview-sidebar-collapsed', Boolean(collapsed));
 }
 function waitForPdfDomPaint(){
   return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
@@ -6258,7 +6588,65 @@ async function previewCurrentPdf(){
   }
 }
 function sanitizeFileName(name){
-  return String(name || 'ficha.pdf').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(-100) || 'ficha.pdf';
+  return String(name || 'ficha.pdf').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(-100) || 'ficha.pdf';
+}
+function normalizeBatchText(value){
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+}
+function parseLegacyPdfBatchName(fileName){
+  const base = String(fileName || '').split('/').pop().replace(/\.pdf$/i,'').trim();
+  const match = base.match(/^(\d+)\s*(?:-|–|—|_)\s*(.*)$/);
+  if(!match) return null;
+  const fichaNumero = String(Number(match[1]));
+  const parts = match[2].split(/\s*(?:-|–|—)\s*/).filter(Boolean);
+  return {fichaNumero, patientHint:parts.slice(1).join(' - ') || parts[0] || base};
+}
+async function importPdfBatchZip(zipFile){
+  if(!zipFile) return;
+  if(typeof JSZip === 'undefined'){ showToast('Não foi possível carregar o leitor de ZIP. Atualize a página e tente novamente.'); return; }
+  if(!supabaseClient || !currentUser){ showToast('É necessário estar conectado ao SNAT para importar os PDFs.'); return; }
+  const currentRecords = recordsForYear(OPERATIONAL_YEAR).filter(r=>r && !r.controleFicha);
+  const byNumber = new Map(currentRecords.filter(r=>r.fichaNumero).map(r=>[String(Number(r.fichaNumero)),r]));
+  const report = {attached:[], skipped:[], invalid:[], errors:[]};
+  try{
+    showToast('Lendo o ZIP e preparando a importação dos PDFs...');
+    const zip = await JSZip.loadAsync(zipFile);
+    const entries = Object.values(zip.files).filter(entry=>!entry.dir && /\.pdf$/i.test(entry.name));
+    if(!entries.length){ showToast('O ZIP não contém arquivos PDF.'); return; }
+    for(const entry of entries){
+      const parsed = parseLegacyPdfBatchName(entry.name);
+      if(!parsed){ report.invalid.push(`${entry.name} — nome sem o padrão “número - agravo - paciente.pdf”`); continue; }
+      const record = byNumber.get(parsed.fichaNumero);
+      if(!record){ report.invalid.push(`${entry.name} — ficha ${parsed.fichaNumero} não encontrada entre as fichas de ${OPERATIONAL_YEAR}`); continue; }
+      if(record.pdfFicha){ report.skipped.push(`${entry.name} — ficha ${parsed.fichaNumero} já possui PDF`); continue; }
+      const expected = normalizeBatchText(record.patientName);
+      const supplied = normalizeBatchText(parsed.patientHint);
+      if(expected && supplied && !expected.includes(supplied) && !supplied.includes(expected)){
+        report.invalid.push(`${entry.name} — nome não confere com “${record.patientName}”`); continue;
+      }
+      try{
+        const blob = await entry.async('blob');
+        const file = new File([blob], entry.name.split('/').pop(), {type:'application/pdf'});
+        const attachment = await uploadPdfAttachment(record.id, file);
+        const updated = {...record, pdfFicha:attachment};
+        const ok = await upsertRecordRemote(updated);
+        if(!ok) throw new Error('registro não confirmado no banco');
+        const index = records.findIndex(r=>r.id===record.id);
+        if(index>=0) records[index] = updated;
+        report.attached.push(`${parsed.fichaNumero} — ${record.patientName}`);
+      }catch(error){ report.errors.push(`${entry.name} — ${error.message || 'falha ao anexar'}`); }
+    }
+    render();
+    const summary = `Importação concluída: ${report.attached.length} anexado(s), ${report.skipped.length} ignorado(s), ${report.invalid.length} pendência(s), ${report.errors.length} erro(s).`;
+    showToast(summary);
+    console.group('Importação de PDFs em lote'); console.log(summary, report); console.groupEnd();
+    if(report.invalid.length || report.errors.length){
+      alert(`${summary}\n\nArquivos que precisam de conferência:\n${[...report.invalid,...report.errors].slice(0,20).join('\n')}${report.invalid.length+report.errors.length>20?'\n...':''}`);
+    }
+  }catch(error){
+    console.error('Falha ao ler o ZIP de PDFs', error);
+    showToast(`Não foi possível processar o ZIP: ${error.message || 'arquivo inválido'}`);
+  }
 }
 function readFileAsDataUrl(file){
   return new Promise((resolve,reject)=>{
@@ -6282,6 +6670,107 @@ async function uploadPdfAttachment(recordId, file){
   }
   const dataUrl = await readFileAsDataUrl(file);
   return {mode:'record', name:file.name, size:file.size, contentType:'application/pdf', dataUrl, uploadedAt:new Date().toISOString()};
+}
+function fichaNumberFromPdfName(name){
+  const base = String(name || '').replace(/\.pdf$/i,'');
+  const firstToken = base.match(/(?:^|[^0-9])([0-9]{3})(?![0-9])/);
+  return firstToken ? firstToken[1] : '';
+}
+function isFicha2026Record(record){
+  if(isImported2026Record(record)) return true;
+  const dates = [record?.dataNotificacao, record?.dataAcidente, record?.dataLancamento, record?.createdAt, record?.updatedAt];
+  return dates.some(value=>String(value || '').slice(0,4) === '2026');
+}
+function batchPdfStatusText(){
+  const state = batchPdfState;
+  if(state.processing) return `Processando PDF ${state.current} de ${state.total}... Não feche esta tela.`;
+  if(state.message) return state.message;
+  return 'Selecione vários PDFs. O número da ficha deve aparecer no nome do arquivo, por exemplo: ficha_425.pdf.';
+}
+function refreshBatchPdfStatus(){
+  const host = document.getElementById('batchPdfStatus');
+  if(!host) return;
+  const state = batchPdfState;
+  const details = state.processing ? '' : ` ${state.success.length} anexado(s), ${state.errors.length} erro(s) e ${state.skipped.length} ignorado(s).`;
+  host.textContent = `${batchPdfStatusText()}${details}`;
+  host.className = `batch-pdf-status ${state.errors.length ? 'has-errors' : ''}`;
+  const input = document.getElementById('batchPdfInput');
+  const button = document.getElementById('batchPdfButton');
+  if(input) input.disabled = state.processing;
+  if(button){ button.disabled = state.processing; button.textContent = state.processing ? 'Processando...' : 'Adicionar PDFs em lote'; }
+}
+function renderBatchPdfResult(){
+  const state = batchPdfState;
+  if(state.processing || (!state.success.length && !state.errors.length && !state.skipped.length)) return '';
+  const lines = [
+    ...state.success.map(item=>`<li class="batch-ok">Ficha ${esc(item.ficha)} — ${esc(item.name)}</li>`),
+    ...state.errors.map(item=>`<li class="batch-error">${esc(item.name)} — ${esc(item.message)}</li>`),
+    ...state.skipped.map(item=>`<li class="batch-skip">${esc(item.name)} — ${esc(item.message)}</li>`),
+  ];
+  return `<details class="batch-pdf-result" open><summary>Resultado da importação</summary><ul>${lines.join('')}</ul></details>`;
+}
+function renderBatchPdfImport(){
+  return `<section class="batch-pdf-panel" aria-labelledby="batchPdfTitle">
+    <div class="batch-pdf-heading">
+      <div><h3 id="batchPdfTitle">Adicionar PDFs em lote às fichas já cadastradas</h3>
+      <p>Selecione vários arquivos PDF. O sistema localizará o número no nome do arquivo e anexará cada documento somente à ficha correspondente de 2026.</p></div>
+      <span class="batch-pdf-badge">1 por vez</span>
+    </div>
+    <div class="batch-pdf-actions">
+      <input id="batchPdfInput" type="file" accept="application/pdf,.pdf" multiple onchange="handleBatchPdfFiles(this.files)" aria-label="Selecionar vários PDFs">
+      <button id="batchPdfButton" type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('batchPdfInput').click()">Adicionar PDFs em lote</button>
+      <span id="batchPdfStatus" class="batch-pdf-status">${esc(batchPdfStatusText())}</span>
+    </div>
+    <p class="hint">O número da ficha são os <b>3 primeiros dígitos</b>: <b>434_007703.pdf</b> anexa na ficha 434 e <b>456 - AT - nome.pdf</b> anexa na ficha 456. PDFs sem 3 dígitos, fichas inexistentes ou números repetidos não serão gravados.</p>
+    <div id="batchPdfResult">${renderBatchPdfResult()}</div>
+  </section>`;
+}
+async function uploadBatchPdfToStorage(recordId, file){
+  if(!supabaseClient || !currentUser) throw new Error('Sessão ou conexão com o armazenamento indisponível.');
+  const fileName = `${recordId}-${Date.now()}-${sanitizeFileName(file.name)}`;
+  const storagePath = `${currentUser.id}/${fileName}`;
+  const {data, error} = await supabaseClient.storage.from(PDF_BUCKET).upload(storagePath, file, {contentType:'application/pdf', upsert:false});
+  if(error) throw new Error('Não foi possível enviar o arquivo para o armazenamento. Nenhuma ficha foi alterada.');
+  return {mode:'storage', name:file.name, size:file.size, contentType:'application/pdf', path:data?.path || storagePath, uploadedAt:new Date().toISOString()};
+}
+function waitBatchPdf(ms){ return new Promise(resolve=>setTimeout(resolve, ms)); }
+async function handleBatchPdfFiles(fileList){
+  if(batchPdfState.processing) return;
+  const files = Array.from(fileList || []).filter(file=>/\.pdf$/i.test(file.name) || file.type === 'application/pdf');
+  if(!files.length){ showToast('Selecione pelo menos um arquivo PDF.'); return; }
+  batchPdfState = {processing:true, current:0, total:files.length, success:[], errors:[], skipped:[], message:''};
+  refreshBatchPdfStatus();
+  render();
+  for(let index=0; index<files.length; index++){
+    const file = files[index];
+    batchPdfState.current = index + 1;
+    refreshBatchPdfStatus();
+    const ficha = fichaNumberFromPdfName(file.name);
+    const matches = records.filter(record=>isFicha2026Record(record) && String(record.fichaNumero || '').replace(/\D/g,'') === ficha);
+    if(!ficha){ batchPdfState.skipped.push({name:file.name, message:'número da ficha não encontrado no nome do arquivo.'}); continue; }
+    if(file.size > PDF_MAX_BYTES){ batchPdfState.skipped.push({name:file.name, message:`arquivo maior que ${formatFileSize(PDF_MAX_BYTES)}.`}); continue; }
+    if(matches.length !== 1){ batchPdfState.skipped.push({name:file.name, message:matches.length ? 'há mais de uma ficha com este número.' : `ficha ${ficha} não encontrada entre as fichas cadastradas de 2026.`}); continue; }
+    const record = matches[0];
+    try{
+      const attachment = await uploadBatchPdfToStorage(record.id, file);
+      const updatedRecord = {...record, pdfFicha:attachment, updatedAt:new Date().toISOString()};
+      const saved = await upsertRecordRemote(updatedRecord);
+      if(!saved){
+        try{ await supabaseClient.storage.from(PDF_BUCKET).remove([attachment.path]); }catch(cleanupError){ console.warn('Não foi possível remover o PDF órfão.', cleanupError); }
+        throw new Error('PDF enviado, mas não foi possível confirmar a atualização da ficha. Verifique o armazenamento antes de repetir.');
+      }
+      Object.assign(record, updatedRecord);
+      batchPdfState.success.push({ficha, name:file.name});
+    }catch(error){
+      batchPdfState.errors.push({name:file.name, message:error?.message || 'falha inesperada.'});
+    }
+    await waitBatchPdf(250);
+  }
+  batchPdfState.processing = false;
+  batchPdfState.message = 'Importação concluída. Os PDFs foram processados individualmente para reduzir a carga no sistema.';
+  refreshBatchPdfStatus();
+  render();
+  showToast(`Importação concluída: ${batchPdfState.success.length} PDF(s) anexado(s).`);
 }
 async function getPdfAttachmentUrl(attachment){
   if(!attachment) return '';
@@ -6307,7 +6796,9 @@ async function getPdfBrowserUrl(attachment){
   }
   return {url:await getPdfAttachmentUrl(attachment), revoke:false};
 }
-function hasPdfSource(attachment){ return Boolean(attachment?.dataUrl || attachment?.path || attachment?.url); }
+function hasPdfSource(attachment){
+  return Boolean(attachment?.dataUrl || attachment?.path || attachment?.url);
+}
 async function loadFullPdfAttachment(recordId, attachment){
   if(hasPdfSource(attachment)) return attachment;
   if(!recordId) return attachment;
@@ -6317,7 +6808,9 @@ async function loadFullPdfAttachment(recordId, attachment){
     if(result.error) throw result.error;
     const fullRecord = result.data?.data;
     const fullAttachment = fullRecord?.pdfFicha;
-    if(!fullAttachment || !hasPdfSource(fullAttachment)) throw new Error('O registro não contém o conteúdo do PDF anexado.');
+    if(!fullAttachment || !hasPdfSource(fullAttachment)){
+      throw new Error('O registro não contém o conteúdo do PDF anexado.');
+    }
     cachePdfRecord(recordId, fullRecord);
     formData = {...formData, ...fullRecord};
     pdfAttachmentState.attachment = fullAttachment;
@@ -6341,19 +6834,61 @@ async function fetchPdfRecord(id){
   if(cached){
     pdfRecordCache.delete(id);
     pdfRecordCache.set(id, cached);
-    return {data:{data:cached}, error:null};
+    return {data:{data:cached},error:null};
   }
   const controller = new AbortController();
   const timer = setTimeout(()=>controller.abort(), PDF_FETCH_TIMEOUT_MS);
   try{
     return await supabaseClient.from('records').select('data').eq('id', id).limit(1).maybeSingle().abortSignal(controller.signal);
   }catch(error){
-    if(error?.name === 'AbortError' || controller.signal.aborted) throw new Error('A busca do PDF excedeu 10 segundos. Verifique a conexão e tente novamente.');
+    if(error?.name === 'AbortError' || controller.signal.aborted) throw new Error('A busca do PDF excedeu 15 segundos. Verifique a conexão e tente novamente.');
     throw error;
   }finally{
     clearTimeout(timer);
   }
 }
+async function openPdfForRecord(id){
+  let record = records.find(r=>r.id===id);
+  const tab = window.open('about:blank', '_blank');
+  if(!tab){ showToast('O navegador bloqueou a nova aba. Permita pop-ups para abrir o PDF.'); return; }
+  // Os PDFs não são carregados no início. Busque o conteúdo completo somente
+  // quando o usuário solicitar a abertura do arquivo e reaproveite-o na sessão.
+  if(record?.pdfFicha && !record.pdfFicha.dataUrl && !record.pdfFicha.path){
+    showPdfLoading();
+    try{
+      const result = await fetchPdfRecord(id);
+      const {data, error} = result;
+      if(error) throw error;
+      if(data?.data){
+        cachePdfRecord(id,data.data);
+        record = {...record, ...data.data};
+        const index = records.findIndex(item=>item.id===id);
+        if(index >= 0) records[index] = record;
+      }
+    }catch(error){
+      console.error('Falha ao carregar o PDF sob demanda', error);
+      tab.close();
+      hidePdfLoading();
+      showToast('Não foi possível carregar o PDF agora. '+(error.message||'Tente novamente.'));
+      return;
+    }
+    hidePdfLoading();
+  }
+  if(!record?.pdfFicha){ tab.close(); showToast('Esta ficha não possui PDF anexado.'); return; }
+  try{
+    const result = await getPdfBrowserUrl(record.pdfFicha);
+    if(!result.url){ tab.close(); showToast('Não foi possível abrir o PDF anexado.'); return; }
+    // Aguarda a conclusão do handler antes de navegar a aba em branco, evitando
+    // corrida entre o contexto da página e o visualizador nativo do navegador.
+    await waitForPdfDomPaint();
+    tab.location.href = result.url;
+    if(result.revoke) setTimeout(()=>URL.revokeObjectURL(result.url), 120000);
+  }catch(error){
+    tab.close();
+    showToast(error.message || 'Não foi possível abrir o PDF anexado.');
+  }
+}
+
 function checkboxGroup(opts){
   const {num, label, key, options} = opts;
   const val = Array.isArray(formData[key]) ? formData[key] : [];
@@ -6374,12 +6909,6 @@ function renderForm(){
       <div class="step ${formPage===2?'active':''} ${!impl?'disabled':''}" onclick="${impl?'switchPage(2)':''}">2. Questionário Específico — ${esc(AGRAVOS[type]?.label||'')}</div>
     </div>
     <form id="mainForm">
-      <div class="voice-dictation-toolbar" aria-live="polite">
-        <button type="button" class="btn btn-ghost" id="voiceDictationBtn" aria-pressed="false">
-          <span aria-hidden="true">●</span> Ditado/Microfone
-        </button>
-        <span id="voiceDictationStatus" class="voice-dictation-status">Fale os campos e valores; por exemplo: “Nome do paciente: Patrícia de Almeida”.</span>
-      </div>
       ${formPage===1 ? renderPage1() : renderPage2(type)}
       <div class="form-actions no-print">
         <button type="button" class="btn btn-ghost" onclick="goTo('consulta')">Cancelar</button>
@@ -6394,7 +6923,47 @@ function renderForm(){
       </div>
     </form>
     <div id="pdfPreviewPanelHost">${renderPdfPreviewPanel()}</div>
+    ${renderWhatsAppPanel()}
   `;
+}
+function renderWhatsAppPanel(){
+  const persisted = Boolean(editingId && formData?.id && records.some(record=>record.id===formData.id));
+  if(!persisted) return '';
+  const telefone = String(formData.resTelefone || '').trim();
+  const dataNotificacao = String(formData.dataNotificacao || '').trim();
+  const canSend = Boolean(telefone && dataNotificacao && formData.patientName);
+  return `<div class="panel whatsapp-panel">
+    <div class="whatsapp-panel-heading">
+      <div>
+        <h2>Contato com o paciente por WhatsApp</h2>
+        <div class="hint">O envio usa o telefone de residência da ficha (<b>resTelefone</b>). Respostas recebidas ficam vinculadas a este registro.</div>
+      </div>
+      <button type="button" class="btn btn-primary btn-sm" onclick="enviarWhatsAppDaFicha()" ${canSend?'':'disabled'}>Enviar mensagem</button>
+    </div>
+    <div class="whatsapp-panel-meta">
+      <span class="badge ${telefone?'green':'amber'}">Telefone: ${esc(telefone || 'não informado')}</span>
+      ${!canSend ? '<span class="hint">Preencha nome, telefone e data da notificação para habilitar o envio.</span>' : ''}
+    </div>
+    <div class="whatsapp-history" data-whatsapp-history data-ficha-id="${esc(formData.id)}">Carregando histórico…</div>
+  </div>`;
+}
+async function enviarWhatsAppDaFicha(){
+  syncFormFromDOM();
+  if(!editingId || !records.some(record=>record.id===formData.id)){
+    showToast('Salve a ficha antes de enviar uma mensagem.');
+    return false;
+  }
+  if(typeof window.enviarWhatsApp !== 'function'){
+    showToast('A integração do WhatsApp ainda não foi carregada.');
+    return false;
+  }
+  return window.enviarWhatsApp({
+    fichaId: formData.id,
+    numero: formData.fichaNumero,
+    nome: formData.patientName,
+    telefone: formData.resTelefone,
+    dataNotificacao: fmtDate(formData.dataNotificacao),
+  });
 }
 function switchPage(p){
   syncFormFromDOM();
@@ -6402,6 +6971,8 @@ function switchPage(p){
   render();
 }
 function renderPage1(){
+  formData.municipioNotificacao = 'Rio das Ostras';
+  formData.ufNotificacao = 'RJ';
   return `
   <div class="panel">
     <div class="form-section">
@@ -6418,6 +6989,7 @@ function renderPage1(){
       <div class="sec-title">Controle da Ficha</div>
       <div class="field-grid">
         ${field({num:'', label:'Nº da Ficha', key:'fichaNumero', hint:'Preenchimento manual'})}
+        ${field({num:'', label:'Tipo especial da ficha', key:'tipoFichaAnimal', type:'select', options:[['','Nenhum'],['animal_agressor','Ficha de animal agressor'],['animal_peconhento','Ficha de animal peçonhento']], hint:'Opcional — selecione somente quando se aplicar'})}
         ${field({num:'', label:'Data de Lançamento', key:'dataLancamento', type:'date'})}
         ${field({num:'', label:'Status', key:'status', type:'select', required:true, options: STATUS_OPTIONS})}
         ${renderPdfUpload()}
@@ -6427,11 +6999,11 @@ function renderPage1(){
     <div class="form-section">
       <div class="sec-title">Notificação Individual</div>
       <div class="field-grid">
-        ${field({num:'', label:'Unidade de Saúde (ou outra fonte notificadora)', key:'unidadeSaude', required:true, span:'span2'})}
+        ${unidadeSaudeField()}
         ${field({num:'', label:'Data da Notificação', key:'dataNotificacao', type:'date', required:true})}
         ${field({num:'', label:'Data do Acidente', key:'dataAcidente', type:'date'})}
-        ${field({num:'', label:'Município de Notificação', key:'municipioNotificacao', required:true})}
-        ${field({num:'', label:'UF de Notificação', key:'ufNotificacao', type:'select', required:true, options: UFS.map(u=>[u,u])})}
+        ${field({num:'', label:'Município de Notificação', key:'municipioNotificacao', required:true, readOnly:true})}
+        ${field({num:'', label:'UF de Notificação', key:'ufNotificacao', type:'select', required:true, options:[['RJ','RJ']]})}
       </div>
     </div>
 
@@ -6447,6 +7019,7 @@ function renderPage1(){
         ${field({num:'', label:'Escolaridade', key:'escolaridade', type:'select', options:[['0','Analfabeto'],['1','1ª a 4ª série incompleta do EF'],['2','4ª série completa do EF'],['3','5ª a 8ª série incompleta do EF'],['4','Ensino fundamental completo'],['5','Ensino médio incompleto'],['6','Ensino médio completo'],['7','Educação superior incompleta'],['8','Educação superior completa'],['9','Ignorado'],['10','Não se aplica']], span:'span2'})}
         ${field({num:'', label:'Gestante', key:'gestante', type:'select', options:[['1','1º Trimestre'],['2','2º Trimestre'],['3','3º Trimestre'],['4','Idade gestacional ignorada'],['5','Não'],['6','Não se aplica'],['9','Ignorado']]})}
         ${field({num:'', label:'Número do Cartão SUS', key:'cartaoSus'})}
+        ${field({num:'', label:'CPF', key:'cpf'})}
       </div>
     </div>
 
@@ -6464,7 +7037,6 @@ function renderPage1(){
         ${field({num:'', label:'Zona', key:'resZona', type:'select', options:[['1','Urbana'],['2','Rural'],['3','Periurbana'],['9','Ignorado']]})}
         ${field({num:'', label:'Ponto de Referência', key:'resPontoReferencia', span:'span2'})}
         ${field({num:'', label:'Telefone (DDD + número)', key:'resTelefone', type:'tel'})}
-        ${field({num:'', label:'País (se residente fora do Brasil)', key:'resPais'})}
       </div>
     </div>
 
@@ -6479,6 +7051,7 @@ function renderPage1(){
           ['01','Empregado registrado com carteira assinada'],['02','Empregado não registrado'],['03','Autônomo/conta própria'],
           ['04','Servidor público estatutário'],['05','Servidor público celetista'],['06','Aposentado'],['07','Desempregado'],
           ['08','Trabalho temporário'],['09','Cooperativado'],['10','Trabalhador avulso'],['11','Empregador'],['12','Outros'],['99','Ignorado']]})}
+        ${field({num:34, label:'Local Onde Ocorreu o Acidente', key:'localAcidente', type:'select', span:'span2', options:[['1','Instalações do contratante'],['3','Instalações de Terceiros'],['2','Via pública'],['4','Domicílio próprio'],['9','Ignorado']]})}
         ${field({num:'', label:'Tempo de Trabalho na Ocupação', key:'tempoTrabalhoOcupacao', hint:'Ex.: 2 anos, 6 meses'})}
       </div>
     </div>
@@ -6500,12 +7073,6 @@ function renderPage1(){
       </div>
     </div>
 
-    <div class="form-section">
-      <div class="sec-title">Dados do Acidente</div>
-      <div class="field-grid">
-        ${field({num:34, label:'Local Onde Ocorreu o Acidente', key:'localAcidente', type:'select', span:'span2', options:[['1','Instalações do contratante'],['2','Via pública'],['3','Instalações de terceiros'],['4','Domicílio próprio'],['9','Ignorado']]})}
-      </div>
-    </div>
   </div>`;
 }
 function idadeChipText(){
@@ -6520,6 +7087,8 @@ function selectAgravo(k){
 }
 
 function renderPage2(type){
+  formData.ufOcorrencia = 'RJ';
+  formData.municipioOcorrencia = 'Rio das Ostras';
   if(type === 'lerdort') return renderPage2LerDort();
   if(type === 'mental') return renderPage2Mental();
   if(type === 'biologico') return renderPage2Biologico();
@@ -6534,8 +7103,8 @@ function renderPage2Grave(){
         ${field({num:'', label:'Data do Acidente', key:'dataAcidente', type:'date', required:true})}
         ${field({num:50, label:'Hora do Acidente', key:'horaAcidente', type:'text', hint:'Formato HH:MM'})}
         ${field({num:51, label:'Horas Após o Início da Jornada', key:'horasAposInicioJornada', hint:'Formato HH:MM'})}
-        ${field({num:52, label:'UF de Ocorrência', key:'ufOcorrencia', type:'select', required:true, options: UFS.map(u=>[u,u])})}
-        ${field({num:53, label:'Município de Ocorrência do Acidente', key:'municipioOcorrencia', required:true, span:'span2'})}
+        ${field({num:52, label:'UF de Ocorrência', key:'ufOcorrencia', type:'select', required:true, options:[['RJ','RJ']]})}
+        ${field({num:53, label:'Município de Ocorrência do Acidente', key:'municipioOcorrencia', required:true, readOnly:true, span:'span2'})}
         ${autocompleteField({num:54, label:'Código da Causa do Acidente (CID-10, V01 a Y98)', key:'causaCID10', db:'cid'})}
         ${field({num:55, label:'Tipo de Acidente', key:'tipoAcidente', type:'select', required:true, options:[['1','Típico'],['2','Trajeto'],['9','Ignorado']]})}
       </div>
@@ -6748,6 +7317,7 @@ function syncFormFromDOM(){
   document.querySelectorAll('#mainForm [data-k]').forEach(el=>{
     formData[el.dataset.k] = el.value;
   });
+  if(formData.unidadeSaude === 'OUTRO') formData.unidadeSaude = String(formData.unidadeSaudeOutro || '').trim();
   const groups = {};
   document.querySelectorAll('#mainForm [data-ck]').forEach(el=>{
     const k = el.dataset.ck;
@@ -6841,14 +7411,6 @@ function lookupCnaeForOccupation(occupation){
 function bindFormEvents(){
   const form = document.getElementById('mainForm');
   if(!form) return;
-  const handleManualFieldChange = e=>{
-    const key = e.target.dataset.k || e.target.dataset.ck;
-    if(key && pdfAutoState.active){
-      pdfAutoState.unresolved = pdfAutoState.unresolved.filter(item=>item !== key);
-      updatePdfFieldVisual(key);
-      refreshPdfAutoSummary();
-    }
-  };
   const handleDuplicateFieldChange = e=>{
     const key = e.target.dataset.k;
     if(!DUPLICATE_CHECK_FIELDS.includes(key)) return;
@@ -6856,7 +7418,6 @@ function bindFormEvents(){
     refreshDuplicateValidation();
   };
   form.addEventListener('input', e=>{
-    handleManualFieldChange(e);
     handleDuplicateFieldChange(e);
     if(e.target.dataset.k === 'dataNascimento'){
       formData.dataNascimento = e.target.value;
@@ -6887,7 +7448,6 @@ function bindFormEvents(){
     }
   });
   form.addEventListener('change', e=>{
-    handleManualFieldChange(e);
     handleDuplicateFieldChange(e);
   });
   const pdfInput = document.getElementById('pdfFichaInput');
@@ -7013,6 +7573,17 @@ function handleAutocomplete(input){
 
 async function saveRecord(){
   syncFormFromDOM();
+  if(yearFromRecord(formData) !== OPERATIONAL_YEAR){
+    showToast('Somente fichas de 2026 podem ser salvas no fluxo principal.');
+    return;
+  }
+  formData.anoReferencia = OPERATIONAL_YEAR;
+  formData.municipioNotificacao = 'Rio das Ostras';
+  formData.ufNotificacao = 'RJ';
+  formData.municipioOcorrencia = 'Rio das Ostras';
+  formData.ufOcorrencia = 'RJ';
+  formData.unidadeSaude = normalizeUnidadeSaude(formData.unidadeSaude);
+  if(formData.status === 'finalizado') formData.ocorreuAtendimentoMedico = '1';
   applyInvestigatorDefaults();
   const duplicateMatches = isEditingExistingRecord() ? [] : refreshDuplicateValidation();
   if(duplicateMatches.some(match=>match.byNumber || match.byNameDate)){
@@ -7032,19 +7603,15 @@ async function saveRecord(){
     }
     if(idx>=0) records[idx] = formData;
     else records.push(formData);
-    linkedRecordIndex = null;
-    operationalControleFichasCache = null;
     const ok = await upsertRecordRemote(formData);
     if(!ok) throw new Error('O registro não foi aceito pelo banco de dados.');
     clearPdfPreview();
     pdfAttachmentState = {file:null, attachment:formData.pdfFicha || null, loading:false, error:''};
-    showToast(formData.pdfFicha ? 'Registro e PDF salvos com sucesso.' : 'Registro salvo com sucesso.');
+    showToast(formData.pdfFicha ? 'Registro e PDF salvos com sucesso. Use “Abrir PDF” na lista para confirmar o arquivo.' : 'Registro salvo com sucesso.');
     goTo('consulta');
   }catch(error){
     if(idx>=0 && previousRecord) records[idx] = previousRecord;
     else records = records.filter(r=>r.id!==formData.id);
-    linkedRecordIndex = null;
-    operationalControleFichasCache = null;
     pdfAttachmentState.loading = false;
     if(btn){ btn.disabled = false; btn.textContent = 'Salvar Registro'; }
     console.error('Falha ao salvar registro e PDF', error);
@@ -7074,7 +7641,7 @@ function renderPrint(id){
     <table>${rows([
       ['Unidade de Saúde', r.unidadeSaude],['Data da Notificação', fmtDate(r.dataNotificacao)],
       ['Data do Acidente', fmtDate(r.dataAcidente)],
-      ['Nome do Paciente', r.patientName],['Data de Nascimento', fmtDate(r.dataNascimento)+ (age!=null?` (${age} anos — ${faixaEtaria(age)})`:'')],
+      ['Nome do Paciente', r.patientName],['Localização da ficha', recordLocation(r)],['Data de Nascimento', fmtDate(r.dataNascimento)+ (age!=null?` (${age} anos — ${faixaEtaria(age)})`:'')],
       ['Sexo', r.sexo],['Município/UF de Notificação', (r.municipioNotificacao||'')+' / '+(r.ufNotificacao||'')],
       ['Ocupação', r.ocupacao],['Nº do SINAN', r.numeroSinan],['CBO', r.cbo],['Classe CNAE', r.cnae],['Empresa', r.nomeEmpresa],['CNPJ/CPF', r.cnpjCpf],
     ])}</table>
@@ -7087,6 +7654,7 @@ function renderPrint(id){
       ['Investigador', r.investigadorNome],['Secretaria', r.codUnidadeSaude],['Função', r.investigadorFuncao],['Nome do Digitador', r.investigadorAssinatura],
     ])}</table>
     <div style="margin-top:12px"><b>Descrição sumária:</b><br>${esc(r.descricaoSumaria||'—')}</div>` : ''}
+    ${r.pdfFicha ? `<div class="pdf-print-link no-print"><button type="button" class="btn btn-ghost btn-sm" onclick="openPdfForRecord('${esc(r.id)}')">Abrir PDF da ficha</button><span>${esc(r.pdfFicha.name || 'ficha.pdf')}</span></div>` : ''}
   </div>`;
 }
 
