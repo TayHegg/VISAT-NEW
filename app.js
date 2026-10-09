@@ -2803,7 +2803,7 @@ function restoreInitialRecordsCache(){
   try{
     const cached = JSON.parse(localStorage.getItem(INITIAL_RECORDS_CACHE_KEY) || 'null');
     if(!cached || !Array.isArray(cached.rows) || Date.now() - Number(cached.savedAt || 0) > INITIAL_RECORDS_CACHE_MAX_AGE_MS) return false;
-    const loaded = cached.rows.filter(Boolean);
+    const loaded = cached.rows.map(stripPdfContentFromLightRecord).filter(Boolean);
     controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
     producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
     records = loaded.filter(row=>yearFromRecord(row)===String(OPERATIONAL_YEAR) && !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
@@ -2824,6 +2824,13 @@ function saveInitialRecordsCache(loaded){
   }
 }
 
+function stripPdfContentFromLightRecord(record){
+  if(!record?.pdfFicha || typeof record.pdfFicha !== 'object') return record;
+  const attachment = {...record.pdfFicha};
+  ['dataUrl','base64','content','blob','payload'].forEach(key=>delete attachment[key]);
+  return {...record, pdfFicha:attachment};
+}
+
 async function loadRecords(year=OPERATIONAL_YEAR, initial=false){
   if(!initial && historicalRecordsCache.has(String(year))){
     const cached = historicalRecordsCache.get(String(year));
@@ -2840,7 +2847,7 @@ async function loadRecords(year=OPERATIONAL_YEAR, initial=false){
       console.warn('Cache leve indisponível; usando a tabela principal como fallback.', lightError);
       allRows = await loadRecordsFromSource('records', year);
     }
-    const loaded = allRows.map(row => row.data).filter(Boolean);
+    const loaded = allRows.map(row => stripPdfContentFromLightRecord(row.data)).filter(Boolean);
     if(initial) saveInitialRecordsCache(loaded);
     if(initial){
       controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
@@ -4616,6 +4623,19 @@ function formatCnaeDisplay(value){
 function occupationLookupKey(value){
   return normalizeSearchText(String(value || '')).replace(/[^a-z0-9]/g,'');
 }
+let cboLookupCache = null;
+const occupationNameCache = new WeakMap();
+function getCboLookupCache(){
+  if(cboLookupCache) return cboLookupCache;
+  cboLookupCache = new Map();
+  CBO_DB.forEach(item=>{
+    [item.code, item.sinan].forEach(value=>{
+      const key = occupationLookupKey(value);
+      if(key && !cboLookupCache.has(key)) cboLookupCache.set(key, item);
+    });
+  });
+  return cboLookupCache;
+}
 function formatOccupationLabel(value){
   const raw = String(value || '').trim();
   if(!raw) return '';
@@ -4628,19 +4648,26 @@ function formatOccupationLabel(value){
 function findOccupationInCboDb(value){
   const key = occupationLookupKey(value);
   if(!key || !Array.isArray(CBO_DB)) return null;
-  return CBO_DB.find(item=>occupationLookupKey(item.code)===key || occupationLookupKey(item.sinan)===key) || null;
+  return getCboLookupCache().get(key) || null;
 }
 function resolveOccupationName(record){
+  if(record && occupationNameCache.has(record)) return occupationNameCache.get(record);
   const candidates = [record.ocupacao, record.cbo, record.numeroCbo, record.cboOcupacao, record.codigoCbo];
   let textualFallback = '';
   for(const candidate of candidates){
     const raw = String(candidate || '').trim();
     if(!raw || normalizeSearchText(raw)==='nao informado') continue;
     const found = findOccupationInCboDb(raw);
-    if(found) return formatOccupationLabel(found.desc);
+    if(found){
+      const result = formatOccupationLabel(found.desc);
+      occupationNameCache.set(record, result);
+      return result;
+    }
     if(!/^[0-9a-z.\-\/]+$/i.test(raw) || /[a-záàâãéêíóôõúç]/i.test(raw) && !/^\d/.test(raw)) textualFallback = raw;
   }
-  return textualFallback ? formatOccupationLabel(textualFallback) : 'Ocupação não identificada';
+  const result = textualFallback ? formatOccupationLabel(textualFallback) : 'Ocupação não identificada';
+  if(record) occupationNameCache.set(record, result);
+  return result;
 }
 function occupationRecordIdentity(record){
   const occupation = resolveOccupationName(record);
