@@ -2713,9 +2713,15 @@ let supabaseClient = null;
 const pdfRecordCache = new Map();
 const PDF_FETCH_TIMEOUT_MS = 15000;
 const RECORDS_PAGE_SIZE = 1000;
+const RECORD_QUERY_TIMEOUT_MS = 10000;
+const RECORD_QUERY_ATTEMPTS = 2;
+const INITIAL_DATA_WAIT_MS = 8000;
+const INITIAL_RECORDS_CACHE_KEY = 'snat_records_light_2026_v1';
+const INITIAL_RECORDS_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
 const loadedRecordYears = new Set();
 const loadingRecordYears = new Map();
 const historicalRecordsCache = new Map();
+let recordsLoading = false;
 try{
   supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   window.supabaseClient = supabaseClient;
@@ -2743,7 +2749,9 @@ async function loadRecordsFromSource(source, year=''){
   for(;;){
     let result = null;
     let lastError = null;
-    for(let attempt=1; attempt<=3; attempt++){
+    for(let attempt=1; attempt<=RECORD_QUERY_ATTEMPTS; attempt++){
+      let controller = null;
+      let timeoutId = null;
       try{
         let query = supabaseClient
           .from(source)
@@ -2756,11 +2764,24 @@ async function loadRecordsFromSource(source, year=''){
         }else{
           query = query.range(allRows.length, allRows.length + RECORDS_PAGE_SIZE - 1);
         }
-        result = await query;
+        controller = new AbortController();
+        if(typeof query.abortSignal === 'function') query = query.abortSignal(controller.signal);
+        result = await Promise.race([
+          query,
+          new Promise((_, reject)=>{
+            timeoutId = setTimeout(()=>{
+              controller.abort();
+              reject(new Error(`A consulta de ${source} excedeu ${RECORD_QUERY_TIMEOUT_MS/1000}s.`));
+            }, RECORD_QUERY_TIMEOUT_MS);
+          })
+        ]);
         if(!result.error) break;
         lastError = result.error;
       }catch(error){ lastError = error; }
-      await new Promise(resolve=>setTimeout(resolve, 350 * attempt));
+      finally{
+        if(timeoutId) clearTimeout(timeoutId);
+      }
+      if(attempt < RECORD_QUERY_ATTEMPTS) await new Promise(resolve=>setTimeout(resolve, 250 * attempt));
     }
     if(!result || result.error) throw lastError || result?.error || new Error(`Não foi possível ler ${source}.`);
     const page = result.data || [];
@@ -2776,6 +2797,31 @@ async function loadRecordsFromSource(source, year=''){
     }
   }
   return allRows;
+}
+
+function restoreInitialRecordsCache(){
+  try{
+    const cached = JSON.parse(localStorage.getItem(INITIAL_RECORDS_CACHE_KEY) || 'null');
+    if(!cached || !Array.isArray(cached.rows) || Date.now() - Number(cached.savedAt || 0) > INITIAL_RECORDS_CACHE_MAX_AGE_MS) return false;
+    const loaded = cached.rows.filter(Boolean);
+    controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
+    producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
+    records = loaded.filter(row=>yearFromRecord(row)===String(OPERATIONAL_YEAR) && !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
+    historicalRecordsCache.set(String(OPERATIONAL_YEAR), records.slice());
+    loadedRecordYears.add(String(OPERATIONAL_YEAR));
+    return records.length > 0 || controleFichas.length > 0 || producaoMensal.length > 0;
+  }catch(error){
+    console.warn('Cache local do Dashboard indisponível.', error);
+    return false;
+  }
+}
+
+function saveInitialRecordsCache(loaded){
+  try{
+    localStorage.setItem(INITIAL_RECORDS_CACHE_KEY, JSON.stringify({savedAt:Date.now(), rows:loaded}));
+  }catch(error){
+    console.warn('Não foi possível atualizar o cache local do Dashboard.', error);
+  }
 }
 
 async function loadRecords(year=OPERATIONAL_YEAR, initial=false){
@@ -2795,6 +2841,7 @@ async function loadRecords(year=OPERATIONAL_YEAR, initial=false){
       allRows = await loadRecordsFromSource('records', year);
     }
     const loaded = allRows.map(row => row.data).filter(Boolean);
+    if(initial) saveInitialRecordsCache(loaded);
     if(initial){
       controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
       producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
@@ -3638,11 +3685,24 @@ async function startApp(){
   document.getElementById('appRoot').innerHTML = APP_SHELL_HTML;
   bindNavEvents();
   const content = document.getElementById('content');
-  if(content){
+  const restoredFromCache = restoreInitialRecordsCache();
+  recordsLoading = true;
+  if(content && !restoredFromCache){
     content.innerHTML = `<div class="panel app-loading" role="status" aria-live="polite"><div class="app-loading-spinner"></div><strong>Carregando fichas de 2026...</strong><span>Aguarde um momento enquanto buscamos os dados do sistema.</span></div>`;
   }
-  await loadRecords(OPERATIONAL_YEAR, true);
   carregarPessoasProducao();
+  if(restoredFromCache) render();
+  const loadPromise = loadRecords(OPERATIONAL_YEAR, true).finally(()=>{
+    recordsLoading = false;
+    if(view !== 'form' && view !== 'print') render();
+  });
+  const firstResponse = await Promise.race([
+    loadPromise.then(()=>true),
+    new Promise(resolve=>setTimeout(()=>resolve(false), INITIAL_DATA_WAIT_MS))
+  ]);
+  if(firstResponse) return;
+  // A aplicação fica utilizável mesmo se a rede ou o banco estiverem lentos.
+  // A mesma promessa continua em segundo plano e atualiza a tela quando terminar.
   render();
 }
 
