@@ -273,6 +273,13 @@ tr:hover td{background:var(--surface-2);}
 .login-hint{margin-top:18px;font-size:11.5px;color:var(--text-muted);text-align:center;line-height:1.5;}
 
 
+/* Estado visível durante a leitura inicial das fichas */
+.app-loading{min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--text-muted);text-align:center;}
+.app-loading strong{color:var(--primary);font-size:14px;}
+.app-loading span{font-size:12px;}
+.app-loading-spinner{width:28px;height:28px;border:3px solid #d7e5e8;border-top-color:var(--accent);border-radius:50%;animation:appLoadingSpin .8s linear infinite;}
+@keyframes appLoadingSpin{to{transform:rotate(360deg)}}
+
 /* Cards interativos e listas de fichas */
 .is-clickable{cursor:pointer;transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease;}
 .is-clickable:hover{transform:translateY(-2px);box-shadow:0 5px 16px rgba(15,59,77,.12);}

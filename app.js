@@ -3556,6 +3556,10 @@ function bindNavEvents(){
 async function startApp(){
   document.getElementById('appRoot').innerHTML = APP_SHELL_HTML;
   bindNavEvents();
+  const content = document.getElementById('content');
+  if(content){
+    content.innerHTML = `<div class="panel app-loading" role="status" aria-live="polite"><div class="app-loading-spinner"></div><strong>Carregando fichas de 2026...</strong><span>Aguarde um momento enquanto buscamos os dados do sistema.</span></div>`;
+  }
   await loadRecords();
   carregarPessoasProducao();
   render();
