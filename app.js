@@ -2711,7 +2711,7 @@ const SUPABASE_URL = 'https://rjcjvxxmfvasymcncrge.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_OqhyfChr2RxPl3xfxAPyuQ_sge3PV7j';
 let supabaseClient = null;
 const pdfRecordCache = new Map();
-const PDF_FETCH_TIMEOUT_MS = 15000;
+const PDF_FETCH_TIMEOUT_MS = 10000;
 const RECORDS_PAGE_SIZE = 1000;
 const RECORD_QUERY_TIMEOUT_MS = 10000;
 const RECORD_QUERY_ATTEMPTS = 2;
@@ -6303,7 +6303,7 @@ async function fetchPdfRecord(id){
   try{
     return await supabaseClient.from('records').select('data').eq('id', id).limit(1).maybeSingle().abortSignal(controller.signal);
   }catch(error){
-    if(error?.name === 'AbortError' || controller.signal.aborted) throw new Error('A busca do PDF excedeu 15 segundos. Verifique a conexão e tente novamente.');
+    if(error?.name === 'AbortError' || controller.signal.aborted) throw new Error('A busca do PDF excedeu 10 segundos. Verifique a conexão e tente novamente.');
     throw error;
   }finally{
     clearTimeout(timer);
