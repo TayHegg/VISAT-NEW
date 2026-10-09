@@ -2708,37 +2708,100 @@ const PRODUCAO_SIA_SUS_CODES = [
 const SUPABASE_URL = 'https://rjcjvxxmfvasymcncrge.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_OqhyfChr2RxPl3xfxAPyuQ_sge3PV7j';
 let supabaseClient = null;
+const pdfRecordCache = new Map();
+const PDF_FETCH_TIMEOUT_MS = 15000;
+const RECORDS_PAGE_SIZE = 500;
+const loadedRecordYears = new Set();
+const loadingRecordYears = new Map();
+const historicalRecordsCache = new Map();
 try{
   supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  window.supabaseClient = supabaseClient;
+  window.__visatSupabaseClient = supabaseClient;
 }catch(e){
   console.error('Falha ao inicializar cliente Supabase (biblioteca não carregou):', e);
 }
 
-async function loadRecords(){
+function applyRecordsCursor(query, cursor){
+  if(!cursor?.updatedAt) return query;
+  if(!cursor.id) return query.gt('updated_at', cursor.updatedAt);
+  return query.or(`updated_at.gt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.gt.${cursor.id})`);
+}
+
+async function loadRecordsFromSource(source){
+  const allRows = [];
+  let cursor = null;
+  for(;;){
+    let result = null;
+    let lastError = null;
+    for(let attempt=1; attempt<=3; attempt++){
+      try{
+        let query = supabaseClient
+          .from(source)
+          .select(source === 'records_light_cache' ? 'id,data,updated_at' : 'data')
+          .order('updated_at', { ascending: true });
+        if(source === 'records_light_cache'){
+          query = query.order('id', { ascending: true }).limit(RECORDS_PAGE_SIZE);
+          query = applyRecordsCursor(query, cursor);
+        }else{
+          query = query.range(allRows.length, allRows.length + RECORDS_PAGE_SIZE - 1);
+        }
+        result = await query;
+        if(!result.error) break;
+        lastError = result.error;
+      }catch(error){ lastError = error; }
+      await new Promise(resolve=>setTimeout(resolve, 350 * attempt));
+    }
+    if(!result || result.error) throw lastError || result?.error || new Error(`Não foi possível ler ${source}.`);
+    const page = result.data || [];
+    allRows.push(...page);
+    if(page.length < RECORDS_PAGE_SIZE) break;
+    if(source === 'records_light_cache'){
+      const lastRow = page[page.length - 1];
+      const nextCursor = {updatedAt:lastRow?.updated_at, id:lastRow?.id};
+      if(!nextCursor.updatedAt || (cursor && nextCursor.updatedAt === cursor.updatedAt && nextCursor.id === cursor.id)){
+        throw new Error('A paginação dos registros leves não avançou.');
+      }
+      cursor = nextCursor;
+    }
+  }
+  return allRows;
+}
+
+async function loadRecords(year=OPERATIONAL_YEAR, initial=false){
+  if(!initial && historicalRecordsCache.has(String(year))){
+    const cached = historicalRecordsCache.get(String(year));
+    const knownIds = new Set(records.map(row=>row.id));
+    records.push(...cached.filter(row=>!knownIds.has(row.id)));
+    loadedRecordYears.add(String(year));
+    return;
+  }
   try{
-    const pageSize = 1000;
-    const allRows = [];
-    for(let offset = 0;; offset += pageSize){
-      const { data, error } = await supabaseClient
-        .from('records')
-        .select('data')
-        .order('updated_at', { ascending: true })
-        .range(offset, offset + pageSize - 1);
-      if(error) throw error;
-      const page = data || [];
-      allRows.push(...page);
-      if(page.length < pageSize) break;
+    let allRows;
+    try{
+      allRows = await loadRecordsFromSource('records_light_cache');
+    }catch(lightError){
+      console.warn('Cache leve indisponível; usando a tabela principal como fallback.', lightError);
+      allRows = await loadRecordsFromSource('records');
     }
     const loaded = allRows.map(row => row.data).filter(Boolean);
-    controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
-    producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
-    records = loaded.filter(row => !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
+    if(initial){
+      controleFichas = loaded.filter(isControleFichaRecord).map(normalizeControleFichaRecord);
+      producaoMensal = loaded.filter(isProducaoMensalRecord).map(normalizeProducaoRecord);
+      ['2024','2025',OPERATIONAL_YEAR].forEach(target=>{
+        historicalRecordsCache.set(String(target), loaded.filter(row=>yearFromRecord(row)===String(target) && !isControleFichaRecord(row) && !isProducaoMensalRecord(row)));
+      });
+    }
+    const loadedRecords = loaded.filter(row=>yearFromRecord(row)===String(year) && !isControleFichaRecord(row) && !isProducaoMensalRecord(row));
+    if(initial) records = loadedRecords;
+    else{
+      const knownIds = new Set(records.map(row=>row.id));
+      records.push(...loadedRecords.filter(row=>!knownIds.has(row.id)));
+    }
+    loadedRecordYears.add(String(year));
   }catch(e){
     console.error('Falha ao carregar registros do Supabase', e);
-    records = [];
-    controleFichas = [];
-    producaoMensal = [];
-    showToast('Não foi possível conectar ao banco de dados.');
+    if(!records.length && !controleFichas.length && !producaoMensal.length) showToast('Não foi possível conectar ao banco de dados.');
   }
 }
 
@@ -3560,7 +3623,7 @@ async function startApp(){
   if(content){
     content.innerHTML = `<div class="panel app-loading" role="status" aria-live="polite"><div class="app-loading-spinner"></div><strong>Carregando fichas de 2026...</strong><span>Aguarde um momento enquanto buscamos os dados do sistema.</span></div>`;
   }
-  await loadRecords();
+  await loadRecords(OPERATIONAL_YEAR, true);
   carregarPessoasProducao();
   render();
 }
@@ -3661,7 +3724,28 @@ function showToast(msg){
 }
 
 /* ============================= NAVEGAÇÃO ============================= */
-function goTo(v, id){
+async function ensureHistoricalYearLoaded(year){
+  const key = String(year);
+  if(loadedRecordYears.has(key)) return true;
+  if(!loadingRecordYears.has(key)){
+    const promise = loadRecords(key, false).finally(()=>loadingRecordYears.delete(key));
+    loadingRecordYears.set(key, promise);
+  }
+  try{
+    await loadingRecordYears.get(key);
+    return loadedRecordYears.has(key);
+  }catch(error){
+    console.error(`Falha ao carregar o Dashboard ${key}`, error);
+    showToast(`Não foi possível carregar os registros de ${key} agora.`);
+    return false;
+  }
+}
+
+async function goTo(v, id){
+  if(v==='analytics2025' || v==='analytics2024'){
+    const year = v.slice(-4);
+    if(!await ensureHistoricalYearLoaded(year)) return;
+  }
   view = v;
   if(v==='producaoDepartamento') producaoView = 'departamento';
   else if(v==='producaoJulio') producaoView = 'julio';
@@ -4125,11 +4209,11 @@ function renderAnalytics(forcedYear=''){
   ${!sourceRecords.length ? `<div class="panel"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg><div>Nenhuma notificação de ${esc(forcedYear || OPERATIONAL_YEAR)} encontrada para os filtros aplicados.</div></div></div>` : `
   <div class="analytics-layout">
       <div class="indicator-col">
-      <div class="ind-card total is-clickable ${analyticsCardFilter==='all'?'selected':''}" role="button" tabindex="0" title="Clique para listar todas as fichas filtradas" onclick="setAnalyticsCardFilter('all')"><div class="n">${total}</div><div class="l">Total Geral de Ocorrências</div></div>
+      <div class="ind-card total is-clickable ${selection.kind==='all'?'selected':''}" role="button" tabindex="0" title="Clique para listar todas as fichas filtradas" onclick="setAnalyticsCardFilter('all')"><div class="n">${total}</div><div class="l">Total Geral de Ocorrências</div></div>
       ${Object.entries(AGRAVOS).map(([k,v])=>`
-        <div class="ind-card ${k} is-clickable ${analyticsCardFilter===k?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas desta classificação" onclick="setAnalyticsFacetFilter('agravo','${k}')"><div class="n">${byType[k]}</div><div class="l">${esc(v.label)}</div><div class="pct">${pct(byType[k],total)}% do total</div></div>
+        <div class="ind-card ${k} is-clickable ${selection.kind==='agravo' && selection.value===k?'selected':''}" role="button" tabindex="0" title="Clique para listar as fichas desta classificação" onclick="setAnalyticsFacetFilter('agravo','${k}')"><div class="n">${byType[k]}</div><div class="l">${esc(v.label)}</div><div class="pct">${pct(byType[k],total)}% do total</div></div>
       `).join('')}
-      <div class="ind-card moto is-clickable ${analyticsCardFilter==='moto'?'selected':''}" role="button" tabindex="0" title="Clique para listar os indícios de acidentes envolvendo motocicleta" onclick="setAnalyticsFacetFilter('moto','')"><div class="n">${motoCount}</div><div class="l">Acidentes envolvendo moto</div><div class="pct">${pct(motoCount,total)}% do total</div></div>
+      <div class="ind-card moto is-clickable ${selection.kind==='moto'?'selected':''}" role="button" tabindex="0" title="Clique para listar os indícios de acidentes envolvendo motocicleta" onclick="setAnalyticsFacetFilter('moto','')"><div class="n">${motoCount}</div><div class="l">Acidentes envolvendo moto</div><div class="pct">${pct(motoCount,total)}% do total</div></div>
     </div>
     <div>
       <div class="charts-grid">
@@ -4186,7 +4270,7 @@ function renderChartMensal(list){
   const toY = v => padT + (H-padT-padB) * (1 - v/maxVal);
   const pathFor = arr => arr.map((v,i)=> `${i===0?'M':'L'} ${xFor(i).toFixed(1)} ${toY(v).toFixed(1)}`).join(' ');
   const seriesSvg = Object.entries(seriesData).map(([k,arr])=>{
-    const points = arr.map((v,i)=> v ? `<circle class="monthly-point is-clickable" cx="${xFor(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="4" fill="${AGRAVO_HEX[k]}" onclick="setAnalyticsMonthFilter('${String(i+1).padStart(2,'0')}','${k}')"/><text class="monthly-point-value is-clickable" x="${xFor(i).toFixed(1)}" y="${(toY(v)-8).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="700" fill="${AGRAVO_HEX[k]}" role="button" tabindex="0" aria-label="${v} ocorrência(s) em ${months[i]}" onclick="setAnalyticsMonthFilter('${String(i+1).padStart(2,'0')}','${k}')">${v}</text>` : '').join('');
+    const points = arr.map((v,i)=> v ? `<circle class="monthly-hit-area" cx="${xFor(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="11" fill="transparent" stroke="none" role="button" tabindex="0" aria-label="${v} ocorrência(s) em ${months[i]}" onclick="setAnalyticsMonthFilter('${String(i+1).padStart(2,'0')}','${k}')"/><circle class="monthly-point" cx="${xFor(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="4" fill="${AGRAVO_HEX[k]}" pointer-events="none"/><text class="monthly-point-value is-clickable" x="${xFor(i).toFixed(1)}" y="${(toY(v)-8).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="700" fill="${AGRAVO_HEX[k]}" role="button" tabindex="0" aria-label="${v} ocorrência(s) em ${months[i]}" onclick="setAnalyticsMonthFilter('${String(i+1).padStart(2,'0')}','${k}')">${v}</text>` : '').join('');
     return `<path d="${pathFor(arr)}" fill="none" stroke="${AGRAVO_HEX[k]}" stroke-width="2.2"/>${points}`;
   }).join('');
   return `<div class="chart-panel wide wide-monthly"><h3>Quantidade de Acidentes por Mês</h3>
@@ -5024,10 +5108,21 @@ const BIOLOGICO_COLS = [
   ['Nome do Digitador', r=>r.investigadorAssinatura||''],
 ];
 
-function exportExcel(){
+let xlsxPromise = null;
+async function exportExcel(){
   const list = getFilteredRecords();
   if(!list.length){ showToast('Nada para exportar.'); return; }
-  if(typeof XLSX === 'undefined'){ showToast('Não foi possível carregar a biblioteca de exportação. Verifique sua conexão com a internet.'); return; }
+  if(typeof XLSX === 'undefined'){
+    showToast('Preparando a exportação do Excel...');
+    if(!xlsxPromise) xlsxPromise = loadVisatExternalScript('https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js','XLSX');
+    try{ await xlsxPromise; }
+    catch(error){
+      xlsxPromise = null;
+      console.error('Falha ao carregar a biblioteca de Excel', error);
+      showToast('Não foi possível carregar a biblioteca de exportação. Verifique sua conexão com a internet.');
+      return;
+    }
+  }
   const sheetsDef = [
     {key:'grave', name:'Acidente Grave', cols: GRAVE_COLS},
     {key:'biologico', name:'Exposição Biológica', cols: BIOLOGICO_COLS},
@@ -6002,8 +6097,50 @@ async function getPdfAttachmentUrl(attachment){
   }
   return attachment.url || '';
 }
+function hasPdfSource(attachment){ return Boolean(attachment?.dataUrl || attachment?.path || attachment?.url); }
+function cachePdfRecord(id, data){
+  if(pdfRecordCache.has(id)) pdfRecordCache.delete(id);
+  pdfRecordCache.set(id, data);
+  while(pdfRecordCache.size > 15) pdfRecordCache.delete(pdfRecordCache.keys().next().value);
+}
+async function fetchPdfRecord(id){
+  const cached = pdfRecordCache.get(id);
+  if(cached){
+    pdfRecordCache.delete(id);
+    pdfRecordCache.set(id, cached);
+    return {data:{data:cached}, error:null};
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), PDF_FETCH_TIMEOUT_MS);
+  try{
+    return await supabaseClient.from('records').select('data').eq('id', id).limit(1).maybeSingle().abortSignal(controller.signal);
+  }catch(error){
+    if(error?.name === 'AbortError' || controller.signal.aborted) throw new Error('A busca do PDF excedeu 15 segundos. Verifique a conexão e tente novamente.');
+    throw error;
+  }finally{
+    clearTimeout(timer);
+  }
+}
 async function openPdfForRecord(id){
-  const record = records.find(r=>r.id===id);
+  let record = records.find(r=>r.id===id);
+  if(!record){ showToast('Ficha não encontrada.'); return; }
+  if(!hasPdfSource(record.pdfFicha)){
+    try{
+      const result = await fetchPdfRecord(id);
+      if(result.error) throw result.error;
+      const fullRecord = result.data?.data;
+      if(fullRecord){
+        cachePdfRecord(id, fullRecord);
+        record = {...record, ...fullRecord};
+        const index = records.findIndex(item=>item.id===id);
+        if(index >= 0) records[index] = record;
+      }
+    }catch(error){
+      console.error('Falha ao carregar o PDF sob demanda', error);
+      showToast('Não foi possível carregar o PDF agora. '+(error.message || 'Tente novamente.'));
+      return;
+    }
+  }
   if(!record?.pdfFicha){ showToast('Esta ficha não possui PDF anexado.'); return; }
   const url = await getPdfAttachmentUrl(record.pdfFicha);
   if(!url){ showToast('Não foi possível abrir o PDF anexado.'); return; }
