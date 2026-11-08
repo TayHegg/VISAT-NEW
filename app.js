@@ -6783,6 +6783,7 @@ async function getPdfAttachmentUrl(attachment){
     try{
       const {data, error} = await supabaseClient.storage.from(PDF_BUCKET).createSignedUrl(attachment.path, 3600);
       if(!error && data?.signedUrl) return data.signedUrl;
+      if(error) console.warn('Não foi possível gerar o link temporário do PDF.', error);
     }catch(error){
       console.warn('Falha ao gerar link temporário do PDF.', error);
     }
@@ -6798,7 +6799,16 @@ async function getPdfBrowserUrl(attachment){
     const blob = new Blob([bytes], {type:attachment.contentType || 'application/pdf'});
     return {url:URL.createObjectURL(blob), revoke:true};
   }
-  return {url:await getPdfAttachmentUrl(attachment), revoke:false};
+  const signedUrl = await getPdfAttachmentUrl(attachment);
+  if(signedUrl) return {url:signedUrl, revoke:false};
+  if(attachment?.mode === 'storage' && attachment.path){
+    const {data, error} = await supabaseClient.storage.from(PDF_BUCKET).download(attachment.path);
+    if(error) throw error;
+    if(data){
+      return {url:URL.createObjectURL(data), revoke:true};
+    }
+  }
+  return {url:'', revoke:false};
 }
 function hasPdfSource(attachment){
   return Boolean(attachment?.dataUrl || attachment?.path || attachment?.url);
@@ -6853,8 +6863,9 @@ async function fetchPdfRecord(id){
 }
 async function openPdfForRecord(id){
   let record = records.find(r=>r.id===id);
+  // Abre imediatamente quando possível para preservar a permissão do clique.
+  // Em navegadores móveis com bloqueio de pop-up, usamos a aba atual como fallback.
   const tab = window.open('about:blank', '_blank');
-  if(!tab){ showToast('O navegador bloqueou a nova aba. Permita pop-ups para abrir o PDF.'); return; }
   // Os PDFs não são carregados no início. Busque o conteúdo completo somente
   // quando o usuário solicitar a abertura do arquivo e reaproveite-o na sessão.
   if(record?.pdfFicha && !record.pdfFicha.dataUrl && !record.pdfFicha.path){
@@ -6871,24 +6882,33 @@ async function openPdfForRecord(id){
       }
     }catch(error){
       console.error('Falha ao carregar o PDF sob demanda', error);
-      tab.close();
+      if(tab) tab.close();
       hidePdfLoading();
       showToast('Não foi possível carregar o PDF agora. '+(error.message||'Tente novamente.'));
       return;
     }
     hidePdfLoading();
   }
-  if(!record?.pdfFicha){ tab.close(); showToast('Esta ficha não possui PDF anexado.'); return; }
+  if(!record?.pdfFicha){ if(tab) tab.close(); showToast('Esta ficha não possui PDF anexado.'); return; }
   try{
     const result = await getPdfBrowserUrl(record.pdfFicha);
-    if(!result.url){ tab.close(); showToast('Não foi possível abrir o PDF anexado.'); return; }
-    // Aguarda a conclusão do handler antes de navegar a aba em branco, evitando
-    // corrida entre o contexto da página e o visualizador nativo do navegador.
-    await waitForPdfDomPaint();
-    tab.location.href = result.url;
+    if(!result.url){
+      if(tab) tab.close();
+      showToast('Não foi possível abrir o PDF anexado. Confira se o arquivo ainda está disponível.');
+      return;
+    }
+    if(tab){
+      // Aguarda a conclusão do handler antes de navegar a aba em branco, evitando
+      // corrida entre o contexto da página e o visualizador nativo do navegador.
+      await waitForPdfDomPaint();
+      tab.location.replace(result.url);
+    }else{
+      // Fallback necessário no navegador embutido do celular quando pop-ups são bloqueados.
+      window.location.assign(result.url);
+    }
     if(result.revoke) setTimeout(()=>URL.revokeObjectURL(result.url), 120000);
   }catch(error){
-    tab.close();
+    if(tab) tab.close();
     showToast(error.message || 'Não foi possível abrir o PDF anexado.');
   }
 }
