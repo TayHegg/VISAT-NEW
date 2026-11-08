@@ -16,26 +16,14 @@ const STATUS_OPTIONS = [
 
 // Base de CID-10 relevante à saúde do trabalhador (referência local — não substitui a tabela oficial completa do DATASUS)
 // Base completa de CID-10 derivada dos arquivos oficiais do DATASUS (versão 2008).
+// CID-10 (DATASUS) carregado sob demanda de data/cid10.json: tira ~1,2 MB do app.js e do primeiro carregamento.
 let CID10_DB = [];
 let cid10LoadPromise = null;
-async function loadCid10(){
-  if(CID10_DB.length) return CID10_DB;
+function loadCid10(){
   if(!cid10LoadPromise){
-    cid10LoadPromise = fetch('data/cid10.json', {cache:'default'})
-      .then(response=>{
-        if(!response.ok) throw new Error(`Não foi possível carregar a base CID-10 (HTTP ${response.status}).`);
-        return response.json();
-      })
-      .then(data=>{
-        if(!Array.isArray(data)) throw new Error('A base CID-10 está em formato inválido.');
-        CID10_DB = data;
-        return CID10_DB;
-      })
-      .catch(error=>{
-        cid10LoadPromise = null;
-        console.error('Falha ao carregar a base CID-10', error);
-        throw error;
-      });
+    cid10LoadPromise = fetch('data/cid10.json').then(r=>{ if(!r.ok) throw new Error('CID-10 indisponível'); return r.json(); })
+      .then(data=>{ CID10_DB = data; return data; })
+      .catch(err=>{ cid10LoadPromise = null; throw err; });
   }
   return cid10LoadPromise;
 }
@@ -7417,15 +7405,9 @@ function bindFormEvents(){
       if(status && formData.cnae) status.textContent = 'CNAE informado. Confira se corresponde à atividade encontrada no Google.';
     }
     if(e.target.dataset.ac === 'cid'){
-      const cidInput = e.target;
-      loadCid10().then(()=>{
-        if(cidInput.isConnected){
-          updateCidDescription(cidInput);
-          handleAutocomplete(cidInput);
-        }
-      }).catch(()=>updateCidDescription(cidInput));
+      updateCidDescription(e.target);
     }
-    if(e.target.dataset.ac === 'cbo'){
+    if(e.target.dataset.ac){
       handleAutocomplete(e.target);
     }
   });
@@ -7434,14 +7416,6 @@ function bindFormEvents(){
   });
   const pdfInput = document.getElementById('pdfFichaInput');
   if(pdfInput) pdfInput.addEventListener('change', ()=>handlePdfInput(pdfInput));
-  // A base CID-10 é carregada somente quando os campos CID entram na tela.
-  const cidInputs = form.querySelectorAll('[data-ac="cid"]');
-  if(cidInputs.length){
-    loadCid10().then(()=>{
-      if(document.getElementById('mainForm') !== form) return;
-      cidInputs.forEach(updateCidDescription);
-    }).catch(()=>{});
-  }
   document.querySelectorAll('.ac-list').forEach(list=>{
     list.addEventListener('mousedown', e=>{
       const item = e.target.closest('.ac-item');
@@ -7487,6 +7461,7 @@ function updateCidDescription(input){
   const box = document.getElementById(`cid-desc-${input.dataset.k}`);
   if(!box) return;
   const code = normalizeCidCode(input.value);
+  if(code.length >= 3 && !CID10_DB.length){ loadCid10().then(()=>updateCidDescription(input)).catch(()=>{}); return; }
   const description = cidDescriptionForValue(input.value);
   box.textContent = description ? `CID selecionado: ${description}` : (code.length >= 3 ? 'CID não localizado na base oficial do DATASUS.' : '');
   box.classList.toggle('has-value', Boolean(description));
@@ -7537,13 +7512,8 @@ function handleCepInput(input){
 }
 function handleAutocomplete(input){
   const isCid = input.dataset.ac === 'cid';
+  if(isCid && !CID10_DB.length){ loadCid10().then(()=>handleAutocomplete(input)).catch(()=>{}); return; }
   const db = input.dataset.ac === 'cbo' ? CBO_DB : CID10_DB;
-  if(isCid && !CID10_DB.length){
-    loadCid10().then(()=>{
-      if(input.isConnected) handleAutocomplete(input);
-    }).catch(()=>{});
-    return;
-  }
   const key = input.dataset.k;
   const rawQuery = normalizeSearchText(input.value.trim());
   const cidQuery = normalizeCidCode(input.value.trim());
